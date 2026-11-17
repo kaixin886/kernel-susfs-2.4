@@ -1,48 +1,92 @@
-# SUSFS v2.4.0 for Xiaomi MIX 4 (odin)
+# SUSFS v2.4.0 + SM8350 动态省电实验（Xiaomi MIX 4 / odin）
 
-将 SUSFS v2.4.0 移植到 Inkypen Linux 5.4 内核，并集成用户指定的 BakaSU `sync-up` 修复版。此仓库是 `kaixin886/kernel-susfs-2.4` 的独立 2.4 工作线；不修改 2.3 主线。
+本工作线面向 Xiaomi MIX 4（`odin`，Snapdragon 888，Linux 5.4.302）。`tune/sm8350-aggressive` 是从 `tune/sm8350-balanced` 独立切出的实验分支；不改 `main`、平衡分支或 SUSFS 2.3。优化目标按优先级排列：息屏/待机少耗电，负载出现时保留调度器和 Android 电源管理的动态响应，游戏负载下尽量平稳。**这些效果必须在 MIX 4 实机 A/B 测量后才能判断，本仓目前没有实机结果。**
 
-## 固定来源
+## 固定源码与 BakaSU #35262
 
-| 组件 | 来源与固定提交 |
+| 组件 | 来源 / 固定提交 |
 |---|---|
-| 内核基线 | [Inkypen `kernel_xiaomi_odin`](https://github.com/Inkypen79/kernel_xiaomi_odin/commit/50e0141b29b62be21632c768e4818348098ac6cd)，`50e0141b29b62be21632c768e4818348098ac6cd` |
-| SUSFS v2.4 基础 | [GitLab `simonpunk/susfs4ksu`](https://gitlab.com/simonpunk/susfs4ksu)，`gki-android12-5.10` 分支基础提交 `6dff25f2b2508f91df309e537771d612dccd201a` |
-| SUSFS 最新上游参考 | [当前分支提交](https://gitlab.com/simonpunk/susfs4ksu/-/commit/784ac9e6fd49bb02499b5b60c57ccc9d0c680204)，`784ac9e6fd49bb02499b5b60c57ccc9d0c680204`；这是分支 HEAD，不是版本号更新提交 |
-| SUSFS v2.4.0 版本标记 | [提交 `45a0575`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/45a057536ddba12fd59fb583a8f5375f83be703e) |
-| BakaSU | [用户指定的 `sync-up`](https://github.com/Baka-SU/BakaSU/commit/55f3dcb11a0ce5b8aad3cb9763b200fe52efe218)，`55f3dcb11a0ce5b8aad3cb9763b200fe52efe218` |
+| odin 内核 | [Inkypen `kernel_xiaomi_odin`](https://github.com/Inkypen79/kernel_xiaomi_odin/commit/50e0141b29b62be21632c768e4818348098ac6cd)，`50e0141b29b62be21632c768e4818348098ac6cd` |
+| SUSFS v2.4 | [GitLab `simonpunk/susfs4ksu`](https://gitlab.com/simonpunk/susfs4ksu)：`gki-android12-5.10` 基础 `6dff25f2b2508f91df309e537771d612dccd201a`；参考 HEAD `784ac9e6fd49bb02499b5b60c57ccc9d0c680204`；v2.4.0 标记 `45a057536ddba12fd59fb583a8f5375f83be703e` |
+| BakaSU `sync-up` | [固定提交 `55f3dcb`](https://github.com/Baka-SU/BakaSU/commit/55f3dcb11a0ce5b8aad3cb9763b200fe52efe218)，完整 SHA `55f3dcb11a0ce5b8aad3cb9763b200fe52efe218` |
+| BakaSU Manager WebView #35262 | [独立修复 `7b65bde`](https://github.com/Baka-SU/BakaSU/commit/7b65bde0710b5e7c6f755545cb15a4abd417f3a8)，完整 SHA `7b65bde0710b5e7c6f755545cb15a4abd417f3a8` |
 | AnyKernel3 | [固定提交](https://github.com/osm0sis/AnyKernel3/commit/41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1)，`41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1` |
+| AOSP Clang | `android-17.0.0_r1`，commit `29182889399818f97baa65ea238c80e8117981eb`，Clang 22.0.2 / r596125 |
 
-SUSFS 的 `kernel-5.4` 上游分支落后于 v2.4，因此以 5.10 分支作为功能参考，并按本内核的 5.4 API 手工适配。最新上游增量加入 SELinux `setxattr` / `post_setxattr` 包装和 SID 转换接口：仅在 `CONFIG_KSU_SUSFS` 下注册；当前 UID ≥ 10000 且 SELinux hide 正在运行时走 SUSFS-aware 路径，其余情况保留原始 SELinux handler。实现沿用 5.4 的 `state->ss`、`policy_rwlock`、`policydb` 与 `sidtab` 布局。
+构建集成前和完成后分别复查远端，BakaSU `sync-up` 最新 HEAD 均为 `55f3dcb…`；该提交不包含 #35262。`7b65bde…` 可干净地单独叠加，只修改 `manager/app/src/main/java/org/bakasu/bakasu/ui/webui/WebViewInterface.kt`，补上主线程派送与 WebView 空值保护。按实际应用到 pinned `sync-up` 的 binary diff 计算，补丁 SHA-256 为 `cff8e5ee87b477ec30bc93fffadb739835987b62cff4a92595c914a3c746520c`。内核 `selinux_hide` 保持原样，`sync-up` 的 Manager API 修改也保留。该补丁是 Manager 源码修复，不是内核改动；AnyKernel ZIP 不含 Manager APK，不会更新 Manager。
 
-BakaSU 固定在用户指定的 `sync-up` 提交，不切换到 `main`。该版本已有 `KSU_SUSFS_PRIORITY_UID_FILTER`，构建 helper 只添加缺少的 `KSU_SUSFS_AVD`，并验证两项均唯一且配置有效。其 `KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE` 兼容宏用于避免 BakaSU 与内核侧 hook 重复实现。
+## 动态省电的策略边界
 
-## 独立优化分支
+本分支不把 CPU 固定在高频，也不硬编码某款游戏的频率/核心亲和性。策略由内核调度器、设备 ROM 的 Power HAL 和 SoC 热管理分层完成：
 
-`tune/sm8350-balanced` 是建立在已验证 2.4 + BakaSU 基线上的更积极、仍可回退的骁龙 888+ 调优实验档：
+- **CPU 负载变化：** 固定 odin 源码提供 schedutil，并启用 WALT 和 task/group uclamp；本项目沿用平衡分支的 schedutil 默认值，让调频跟随运行负载。Android 的顶层任务/性能提示可通过设备 Power HAL 影响实际策略。
+- **空闲/息屏：** 保留 Qualcomm LPM、TEO、NO_HZ/RCU 和 QTI thermal/DCVS。AOSP Power HAL 的 `setInteractive(false)` 是进入非交互（通常是息屏）时调整 CPUfreq 参数、允许系统低功耗 suspend 的入口；本仓只有内核，没有目标 ROM 的 Power HAL 源码，故不伪造屏幕状态检测器。
+- **游戏/高负载：** Android Performance Hint / ADPF 允许游戏向系统报告工作时长和目标帧期限，再由设备按本机拓扑与热设计调资源；[AOSP 文档](https://source.android.com/docs/core/perf/performance-hint-api)明确不应把核心亲和性写死。[Power HAL 接口](https://android.googlesource.com/platform/hardware/interfaces/+/fd877b5479b1639b4ba57af5c1f78a7a463e6be1/power/1.0/IPower.hal)中的 `powerHint()` 也由平台决定如何处理。
+- **触控瞬时响应：** odin WALT 有事件驱动的 [cpu-boost](https://github.com/Inkypen79/kernel_xiaomi_odin/blob/50e0141b29b62be21632c768e4818348098ac6cd/kernel/sched/walt/cpu-boost.c)：收到输入事件后短时增加 CPU 频率下限/可选 scheduler boost，然后自动撤销；源码中的输入 boost 时长默认 40 ms，但各 CPU 的 `input_boost_freq` 和 `sched_boost_on_input` 默认都为 0，因此是否启用由 ROM/Power HAL 决定。本分支保留这些接口，不把 boost 强加给每次触摸。
 
-- CPUFreq 默认从 `performance` 改为 `schedutil`，但仍保留 `performance` governor 供 Android/厂商服务或回退使用。固定 odin 驱动支持 per-policy governor 与 fast switch，且 schedutil 已编译；如果 Android 启动后重设 governor，内核默认值不会覆盖其选择。
-- CPUIdle 同时编入 `menu` 和 `TEO`，默认通过 `cpuidle.governor=teo` 选择 TEO；`IDLE_GOVERNOR=menu` 可构建回退档。固定 odin 源码的 TEO Kconfig 说明某些 workload 会受益且通常可安全使用，但这不是 MIX 4 实机省电或延迟提升的证据。原有 `cgroup_disable=pressure` 被保留，内核使用已有 `CONFIG_CMDLINE_EXTEND=y` 追加参数，不启用会替换 bootloader 命令行的 `CMDLINE_FORCE`。若 bootloader 或用户空间另设 governor，以实机 `current_governor` 为准。
-- Qualcomm `ARM_QCOM_LPM_CPUIDLE`、WALT、uclamp、cpuset、`HZ=250`、`NO_HZ_IDLE`、RCU callback offload、CPU 频率表/OPP，以及 QTI thermal/DCVS、CPU isolation/hotplug/voltage cooling 和 step-wise 热管理均保留；构建脚本会在 `olddefconfig` 后断言关键项仍启用。没有改温度阈值、最高频率、电压表、触摸 boost、zram/writeback 或厂商 thermal policy。
+基于此，**不加常驻轮询 `dumpsys`/前台应用的脚本**：它会主动唤醒 CPU，可能影响息屏省电，还可能与 ROM 的 Power HAL、thermal/DCVS 抢写。自动识别游戏和屏幕状态需要目标 ROM 的电源 HAL/系统服务，而不是只改内核即可安全完成。
 
-参考对照：同为 SM8350 的 [OnePlus 9 stock defconfig（固定提交 `9a0c7d6`）](https://github.com/AOSPA/android_kernel_oneplus_sm8350/blob/9a0c7d6add912e2f0935c55bf92d0e8468dac2e3/arch/arm64/configs/oneplus9-stock_defconfig) 也采用 WALT/uclamp、Qualcomm LPM、`performance` 默认与 `menu` idle，并未启用 TEO。MIX 4 保留共同的平台调度/idle/热管理框架；`schedutil + TEO` 是本分支用于实机 A/B 的本地调优假设，不是把 OnePlus 的设备专属频点、boost 或热表搬过来。可核对的本仓固定基线包括 [odin_defconfig](https://github.com/Inkypen79/kernel_xiaomi_odin/blob/50e0141b29b62be21632c768e4818348098ac6cd/arch/arm64/configs/odin_defconfig)、[TEO Kconfig](https://github.com/Inkypen79/kernel_xiaomi_odin/blob/50e0141b29b62be21632c768e4818348098ac6cd/drivers/cpuidle/Kconfig)、[Qualcomm LPM 驱动](https://github.com/Inkypen79/kernel_xiaomi_odin/blob/50e0141b29b62be21632c768e4818348098ac6cd/drivers/cpuidle/lpm-levels-of.c) 与 [Qualcomm CPUFreq 驱动](https://github.com/Inkypen79/kernel_xiaomi_odin/blob/50e0141b29b62be21632c768e4818348098ac6cd/drivers/cpufreq/qcom-cpufreq-hw.c)。
+## 本分支新增的可回滚实验
 
-构建默认 TEO 档：`JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh`；若要生成保留原 menu 默认的对照包：`IDLE_GOVERNOR=menu JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh`。两种配置都应在 odin 真机检查实际 policy governor 和 idle governor，再对照待机、短交互、持续 CPU/GPU 负载、温度、热限频、功耗与性能。**尚未实机刷写或测量，不能宣称续航或持续性能已提升，也不能保证设备启动。**
+新增 `scripts/odin-schedutil-fast-down.sh`。在 schedutil 仍负责动态升降频的前提下，用户可手动把每个 policy 的 `down_rate_limit_us` 临时设成 `0`，让负载下降后更快尝试降频；`up_rate_limit_us` 保持不变。这是息屏/短时负载后的省电候选值，不是保证收益的默认策略，也不等同于按游戏/息屏自动切换。
 
-## 构建与验证
+脚本提供 `status`、`apply`、`restore`：`apply` 只在所有 policy 都是 schedutil 时才执行，先保存每个 policy 原始 up/down 值；`restore` 在同一次启动中逐项恢复。状态文件只允许 root 访问并带 boot ID；如果设备已重启，脚本只清除旧快照、不把旧值写进新启动策略。脚本不会改 governor、频率上限、OPP/电压、CPU 拓扑、IRQ、热管理或开机行为。任何卡顿、续航/温度回退或异常时可运行 `restore`；重启也会回到内核/ROM 自身默认策略。
 
-运行 `JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh` 可从固定源码执行完整 arm64 `Image` 构建并打 AnyKernel3 包。脚本校验 `port/SHA256SUMS`，在新建的私有临时目录中获取固定内核、BakaSU 和 AnyKernel3；AOSP Clang 从固定 Gitiles commit 分目录拉取，先验 gzip/tar 归档，不完整时拆分目录并按 Git blob ID 校验单文件。编译参数用 `-ffile-prefix-map` / `-fmacro-prefix-map` 规范源和输出路径。产物只原子更新到带专用标记的 `out/`；不会清理或复用旧 `work/`。默认 `INSTALL_DEPS=1` 会安装构建依赖。
+从 AnyKernel ZIP 导出脚本到设备后运行：
 
-固定 pinned 构建已成功，UTS release 为 `5.4.302-inkypen-v2`；工具链锁定 AOSP `android-17.0.0_r1` commit `29182889399818f97baa65ea238c80e8117981eb` 中的 Clang `r596125`（22.0.2）。最终配置的 KSU、SUSFS、AVD 和 Priority UID Filter 均为 `y`，ext4、F2FS、UFS、dm-verity、dm-crypt、Binder 与 SELinux 关键项也启用。与固定内核提交的原始 `odin_defconfig` 对比，5,413 个显式配置项无缺失或未解释差异；差异仅是构建明确启用的项和固定 Clang 版本元数据。
+```sh
+unzip -p out/odin-susfs-v2.4.0-bakasu-ak3.zip tools/odin-schedutil-fast-down.sh > /tmp/odin-schedutil-fast-down.sh
+adb push /tmp/odin-schedutil-fast-down.sh /data/local/tmp/odin-schedutil-fast-down.sh
+adb shell su -c 'sh /data/local/tmp/odin-schedutil-fast-down.sh status'
+adb shell su -c 'sh /data/local/tmp/odin-schedutil-fast-down.sh apply'
+adb shell su -c 'sh /data/local/tmp/odin-schedutil-fast-down.sh restore'
+```
 
-四轮独立干净构建均成功，UTS release 均为 `5.4.302-inkypen-v2`，`Image` 长度均为 37,292,544 字节。但四轮 SHA-256 各不相同；同一配置与源码 pin 下未实现字节级可复现，原因尚未最终确认。构建 4、5、6 使用 `JOBS=8`，构建 7 使用 `JOBS=1`，调低并行度也未消除差异。完整比较和可能原因见 [`port-notes.md`](port-notes.md)。
+先看 `status`，确认每个 policy 的 governor 与 tunables；若某 policy 不是 schedutil，脚本会拒绝修改。重启后若状态文件仍在，先运行 `restore` 让脚本识别并丢弃旧 boot ID，再考虑新一轮测试。
 
-主线 `60633be` 第七轮基线产物的 Image SHA-256 为 `e0d655edd51f0a319ffe68c3e518243174cc5c5a73ce89bc0cfc81b9d3607c9a`，AnyKernel3 ZIP SHA-256 为 `06145058deabd5317b736f77d16af59292f37e1605b46d0e12c6a36086dd2a80`；这是调优前对照值，不代表本分支构建产物。
+## 已核查的来源与未采用项
 
-调优分支本次固定 pin 的 arm64 构建成功，UTS release 为 `5.4.302-inkypen-v2`。`out/SHA256SUMS` 对 Image、kernel.config、source-pins.txt 和 AnyKernel3 ZIP 的逐项校验均通过；ZIP 完整性、28 项文件清单，以及包内 Image 与独立 Image 的逐字节一致性均通过。最终 Image SHA-256：`c85fa34626fea9f6b7f5ca8d67354786ef23f163ca3eee953b68e839fb4813d1`；AnyKernel3 ZIP SHA-256：`db6e2c6bf41716681f266ae9a61753805d4d2cf7cc98dd7c1b378d86332c827f`。最终配置确认 schedutil 默认、TEO 请求、menu/TEO 均编入、`CMDLINE_EXTEND` 生效且未强制覆盖 bootloader 参数，并保留 Qualcomm LPM、WALT/uclamp、NO_HZ/RCU 与 QTI thermal/DCVS 等断言项。
+odin 基线已带 WALT/uclamp、schedutil、Qualcomm LPM、zram、NO_HZ/RCU、QTI thermal/DCVS。对照了 [OnePlus 9 SM8350 社区内核](https://github.com/dev-sm8350/kernel_oneplus_sm8350/tree/edf0a8d63717aa1cfc387f6fd6d13e02aa3ce579) 和 [OnePlus OSS Lahaina QGKI](https://github.com/OnePlusOSS/android_kernel_oneplus_sm8350/blob/13ca08fdf0979fdd61d5e8991661874bb2d19150/arch/arm64/configs/vendor/lahaina_QGKI.config)；不同机型的任务策略、boost、CPU 容量、DT/OPP、IRQ 和温控并不通用。没有 odin A/B 数据支持改 WALT 窗口、全局 sched_boost、CPU/IRQ 亲和性、频率/电压表、热表或 zram/writeback，所以都不复制、不关闭 throttling、不碰启动关键机制。MIX 4 schedutil 实现见[固定源码](https://github.com/Inkypen79/kernel_xiaomi_odin/blob/50e0141b29b62be21632c768e4818348098ac6cd/kernel/sched/cpufreq_schedutil.c)。
 
-构建日志有非致命 Kconfig choice override、`thermal_core.c` 的 3 条 `snprintf` fortify warning，以及 MODPOST 对 `embms_tm_multicast_recv` 为 static `EXPORT_SYMBOL` 的警告；没有编译错误。
+## 构建与回归测试
 
-**设备侧尚未测试。** 构建和打包通过不等于设备可启动；仍需在 odin 设备验证刷写、启动、SELinux 策略加载、布尔值、AVC 行为及重启回归。
+固定输入全量构建 arm64 `Image` 并打 AnyKernel3 ZIP：
 
-逐文件移植、5.4 API 适配和新增钩子的审计记录见 [`port-notes.md`](port-notes.md)。精确 pin 也会随构建写入 `out/source-pins.txt`。
+```sh
+JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh
+```
+
+默认 `IDLE_GOVERNOR=teo`；可设 `IDLE_GOVERNOR=menu` 做 idle governor 对照。构建脚本校验 SUSFS 文件清单与哈希、所有来源 pin、BakaSU WebView 补丁只触及预期 Manager 文件、profile 脚本语法和关键配置；包内 Image 与独立 Image 会逐字节比较，ZIP 清单和完整性会检查，`source-pins.txt` 记录固定 SHA 和运行时 profile SHA-256。产物位于 `out/`。
+
+可重复运行 mock-sysfs 回归测试（需要 root 或 sudo）：
+
+```sh
+bash scripts/test-odin-schedutil-fast-down.sh
+```
+
+测试覆盖同次启动 apply/restore 精确恢复、跨重启快照不写 sysfs、任一 policy 非 schedutil 时不做部分修改，以及 `status` 只读。它不能替代实机测试。
+
+## MIX 4 实机验收
+
+当前没有这台设备的测量数据。建议在同一固件/ROM、刷新率、亮度、网络、温度、应用和电量范围做 A/B/A：默认值 → 应用 fast-down → 恢复；每轮只改一个变量并重复。验收至少记录：
+
+| 场景 | 需要记录 |
+|---|---|
+| 息屏过夜 | 持续时长、起止电量/电流、温度、网络、唤醒源、`wakeup_sources`、Qualcomm cpuidle residency、schedutil tunables |
+| 游戏 | 游戏/画质/FPS 上限、帧时间 P50/P95/P99 与掉帧、CPU/GPU 频率/负载、温度和 thermal cap/限频时间、游戏退出后的降频/降温 |
+| 日常交互 | 触摸至首帧延迟、滚动掉帧、input boost 实际值、后台/息屏唤醒情况 |
+| 安全性 | 启动/重启/休眠唤醒、modem/Wi‑Fi、音频/相机、内核日志、异常重启与 SELinux/AVC |
+
+若没有稳定的待机收益或游戏帧时间变差，就恢复默认，不保留该候选。构建和 ZIP 通过不证明能启动，也不能证明电池/游戏表现。SUSFS 逐文件移植与 5.4 API 适配审计见 [`port-notes.md`](port-notes.md)。
+
+## 构建结果
+
+2026-11-18 00:44（UTC+8）以 `JOBS=8 INSTALL_DEPS=0` 完成固定 arm64 全量构建，退出码为 0；内核版本串为 `5.4.302-inkypen-v2`。AOSP Clang `android-17.0.0_r1` / `2918288…` 的全部固定子树均通过校验；下载 `musl` 子树时一次 HTTP 503 后重试成功并通过哈希校验。
+
+最终 `.config` 已确认 `CONFIG_CPU_FREQ=y`，默认 governor 为 schedutil（performance governor 仍编入以供平台切换），WALT、uclamp task/group、Qualcomm LPM、TEO、NO_HZ/RCU、QTI thermal/DCVS 及 CPU isolation/hotplug/voltage cooling 配置保留；TEO 由追加的 `cpuidle.governor=teo` 请求，强制替换 bootloader 命令行仍关闭。SUSFS、BakaSU 和关键配置断言均通过。
+
+构建和独立复核均通过：SUSFS 文件集/哈希、源码 pin、mock-sysfs 四项回归、`sha256sum -c out/SHA256SUMS`、ZIP 完整性、ZIP 恰为 pinned AnyKernel3 模板文件集的 29 项，且包内 Image 和 fast-down 脚本分别与构建产物/源码逐字节一致。`out/Image` SHA-256 为 `16f1427e137d9e02fa4f3f0f7ea9ad3dcfc07b9cd7ec9d4041908e84379748f4`；`out/odin-susfs-v2.4.0-bakasu-ak3.zip` SHA-256 为 `22eaca72083e59757cc738392ea78c85246ee516218ea59229fe4c5020e9a6ca`。其余产物哈希列在 `out/SHA256SUMS`；运行时脚本 SHA-256 为 `86c2047f569b6aecd8a06401c0f0093be4bfb35f404429735d2c50c4a040d38e`。
+
+**已知构建告警：** 固定上游 `drivers/thermal/thermal_core.c` 有三条 `-Wfortify-source` 告警（第 1895、1976、1995 行，`PAGE_SIZE` 参数 4096 大于 128 字节目标缓冲区）；MODPOST 另提示 `embms_tm_multicast_recv` 是 static `EXPORT_SYMBOL`。Kconfig 还报告 schedutil 默认和 KSU_SUSFS 选择项被显式覆盖；最终 `.config` 断言通过。这些内核源文件没有被本分支修改；为遵守保留热管理的要求，未对 thermal 代码做未经验证的改写。无编译错误。
+
+BakaSU #35262 的路径、单文件范围、干净应用和实际 binary diff SHA 已验证；未生成 Manager APK，也未运行 Manager Gradle 编译，因为环境未提供 Android SDK（`ANDROID_HOME`/`ANDROID_SDK_ROOT` 均未配置）。没有 MIX 4 实机启动、待机、游戏或电池 A/B 数据；**构建通过不代表已验证启动安全、性能提升或省电收益。**

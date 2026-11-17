@@ -11,6 +11,8 @@ OUT_MARKER="$OUT/.kernel-susfs-2.4-generated-output-v1"
 KERNEL_URL="https://github.com/Inkypen79/kernel_xiaomi_odin.git"
 KERNEL_REF="50e0141b29b62be21632c768e4818348098ac6cd"
 BAKASU_REF="55f3dcb11a0ce5b8aad3cb9763b200fe52efe218"
+BAKASU_MANAGER_FIX_REF="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
+BAKASU_MANAGER_FIX_PATH="manager/app/src/main/java/org/bakasu/bakasu/ui/webui/WebViewInterface.kt"
 BAKASU_URL="https://github.com/Baka-SU/BakaSU.git"
 SUSFS_UPSTREAM_URL="https://gitlab.com/simonpunk/susfs4ksu.git"
 SUSFS_UPSTREAM_BRANCH="gki-android12-5.10"
@@ -35,6 +37,8 @@ case "$IDLE_GOVERNOR" in
   menu|teo) ;;
   *) fail "IDLE_GOVERNOR must be either menu or teo" ;;
 esac
+sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors"
+bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profile test has shell syntax errors"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -180,6 +184,19 @@ curl -fsSL "https://raw.githubusercontent.com/Baka-SU/BakaSU/$BAKASU_REF/kernel/
 git -C "$KSRC/KernelSU" checkout --detach -q "$BAKASU_REF"
 [[ "$(git -C "$KSRC/KernelSU" rev-parse HEAD)" == "$BAKASU_REF" ]] || fail "BakaSU checkout is not pinned"
 
+step "apply pinned BakaSU Manager WebView fix (#35262) without changing sync-up kernel code"
+git -C "$KSRC/KernelSU" fetch --no-tags origin "$BAKASU_MANAGER_FIX_REF" || fail "could not fetch pinned BakaSU Manager fix"
+[[ "$(git -C "$KSRC/KernelSU" rev-parse "$BAKASU_MANAGER_FIX_REF^{commit}")" == "$BAKASU_MANAGER_FIX_REF" ]] || fail "BakaSU Manager fix commit is unavailable"
+git -C "$KSRC/KernelSU" cherry-pick --no-commit "$BAKASU_MANAGER_FIX_REF" || fail "BakaSU Manager fix does not apply cleanly to pinned sync-up"
+[[ "$(git -C "$KSRC/KernelSU" diff --cached --name-only)" == "$BAKASU_MANAGER_FIX_PATH" ]] || fail "BakaSU Manager fix touched unexpected paths"
+git -C "$KSRC/KernelSU" diff --cached --check || fail "BakaSU Manager fix has whitespace errors"
+grep -Fq 'private fun postToWebView(action: (android.webkit.WebView) -> Unit)' "$KSRC/KernelSU/$BAKASU_MANAGER_FIX_PATH" || fail "BakaSU Manager WebView fix marker is missing"
+grep -Fq 'mainHandler.post { state.webView?.let(action) }' "$KSRC/KernelSU/$BAKASU_MANAGER_FIX_PATH" || fail "BakaSU Manager null-safe main-thread dispatch is missing"
+git -C "$KSRC/KernelSU" reset -q --mixed "$BAKASU_REF"
+[[ "$(git -C "$KSRC/KernelSU" diff --name-only)" == "$BAKASU_MANAGER_FIX_PATH" ]] || fail "BakaSU integration contains unexpected working-tree changes"
+BAKASU_MANAGER_PATCH_SHA256="$(git -C "$KSRC/KernelSU" diff --binary "$BAKASU_REF" -- "$BAKASU_MANAGER_FIX_PATH" | sha256sum | awk '{print $1}')"
+RUNTIME_PROFILE_SHA256="$(sha256sum "$ROOT/scripts/odin-schedutil-fast-down.sh" | awk '{print $1}')"
+
 step "overlay verified SUSFS v2.4.0 port (upstream reference $SUSFS_UPSTREAM_REF)"
 cp -a "$ROOT/port/out/." "$KSRC/"
 grep -q 'SUSFS_VERSION "v2.4.0"' "$KSRC/include/linux/susfs.h" || fail "overlay is not SUSFS v2.4.0"
@@ -312,7 +329,11 @@ KBUILD_BUILD_HOST: $KBUILD_BUILD_HOST
 KBUILD_BUILD_VERSION: $KBUILD_BUILD_VERSION
 Compiler path normalization: -ffile-prefix-map=<KSRC>=kernel-src and -ffile-prefix-map=<KOUT>=kernel-out in KCFLAGS/KAFLAGS
 BakaSU repository: $BAKASU_URL
-BakaSU sync-up commit: $BAKASU_REF
+BakaSU latest sync-up tip pinned at integration: $BAKASU_REF
+BakaSU Manager #35262 WebView fix commit: $BAKASU_MANAGER_FIX_REF
+BakaSU Manager fix path: $BAKASU_MANAGER_FIX_PATH
+BakaSU Manager patch SHA-256: $BAKASU_MANAGER_PATCH_SHA256
+BakaSU Manager fix is source-only; the AnyKernel3 ZIP contains the kernel Image, not a Manager APK
 AOSP Clang repository: $AOSP_CLANG_URL
 AOSP Clang tag: $AOSP_CLANG_TAG
 AOSP Clang commit: $CLANG_ACTUAL_REF
@@ -326,9 +347,13 @@ CPU idle governors: menu and TEO both built-in; requested default=$IDLE_GOVERNOR
 Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
 Command-line mode: bootloader arguments appended; forced override disabled
 Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
+Runtime profile: tools/odin-schedutil-fast-down.sh (manual only; sets per-policy schedutil down_rate_limit_us=0)
+Runtime profile rollback: exact per-policy values saved to /data/local/tmp/odin-schedutil-fast-down.state and restored on request
+Runtime profile SHA-256: $RUNTIME_PROFILE_SHA256
 EOF
 
 step "package and verify pinned AnyKernel3 for odin / Horizon Kernel Flasher"
+sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors before packaging"
 AK3_DIR="$WORK/ak3"
 mkdir -p "$AK3_DIR"
 git init -q "$AK3_DIR"
@@ -340,11 +365,15 @@ AK3_ACTUAL_REF="$(git -C "$AK3_DIR" rev-parse HEAD)"
 rm -rf -- "$AK3_DIR/.git" "$AK3_DIR/.github"
 cp "$ROOT/scripts/ak3/anykernel.sh" "$AK3_DIR/anykernel.sh"
 cp "$OUT_STAGE/Image" "$AK3_DIR/Image"
+mkdir -p "$AK3_DIR/tools"
+cp "$ROOT/scripts/odin-schedutil-fast-down.sh" "$AK3_DIR/tools/odin-schedutil-fast-down.sh"
+chmod 0755 "$AK3_DIR/tools/odin-schedutil-fast-down.sh"
 find "$AK3_DIR" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 (cd "$AK3_DIR" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | TZ=UTC zip -X -q "$OUT_STAGE/$ZIP_NAME" -@)
 unzip -t "$OUT_STAGE/$ZIP_NAME" >/dev/null || fail "AnyKernel3 ZIP integrity check failed"
 unzip -p "$OUT_STAGE/$ZIP_NAME" Image | cmp - "$OUT_STAGE/Image" || fail "AnyKernel3 ZIP Image differs from the built Image"
 unzip -p "$OUT_STAGE/$ZIP_NAME" anykernel.sh | cmp - "$ROOT/scripts/ak3/anykernel.sh" || fail "AnyKernel3 ZIP install script differs from the reviewed template"
+unzip -p "$OUT_STAGE/$ZIP_NAME" tools/odin-schedutil-fast-down.sh | cmp - "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "AnyKernel3 ZIP runtime profile differs from the reviewed script"
 python3 - "$AK3_DIR" "$OUT_STAGE/$ZIP_NAME" <<'PYEOF'
 from pathlib import Path
 import sys
