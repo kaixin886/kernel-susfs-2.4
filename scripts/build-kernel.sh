@@ -27,9 +27,14 @@ AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
 ZIP_NAME="odin-susfs-v2.4.0-bakasu-ak3.zip"
 JOBS="${JOBS:-$(nproc)}"
+IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
 step() { printf '\n===== %s =====\n' "$*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
+case "$IDLE_GOVERNOR" in
+  menu|teo) ;;
+  *) fail "IDLE_GOVERNOR must be either menu or teo" ;;
+esac
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -243,15 +248,42 @@ done
 step "configure odin_defconfig"
 make "${MAKE_ARGS[@]}" odin_defconfig
 CFG="$KOUT/.config"
+# Use scheduler-driven CPU frequency scaling and a testable TEO idle policy.
+# Keep performance/menu compiled, preserve Qualcomm LPM, and let the bootloader
+# append its arguments rather than forcing a replacement kernel command line.
 "$KSRC/scripts/config" --file "$CFG" \
   --enable KSU --enable KPROBES --enable KALLSYMS_ALL \
   --enable EXT4_FS --enable HEADERS_INSTALL \
   --enable KSU_SUSFS --enable KSU_SUSFS_AVD \
-  --enable KSU_SUSFS_PRIORITY_UID_FILTER
+  --enable KSU_SUSFS_PRIORITY_UID_FILTER \
+  --enable CPU_FREQ_GOV_SCHEDUTIL \
+  --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+  --enable CPU_FREQ_GOV_PERFORMANCE \
+  --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
+  --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
 make "${MAKE_ARGS[@]}" olddefconfig
-for config in CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER; do
+for config in \
+  CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD \
+  CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
+  CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL CONFIG_CPU_FREQ_GOV_PERFORMANCE \
+  CONFIG_CPU_IDLE_GOV_MENU CONFIG_CPU_IDLE_GOV_TEO CONFIG_ARM_QCOM_LPM_CPUIDLE \
+  CONFIG_NO_HZ_IDLE CONFIG_RCU_FAST_NO_HZ CONFIG_RCU_NOCB_CPU \
+  CONFIG_SCHED_WALT CONFIG_UCLAMP_TASK CONFIG_UCLAMP_TASK_GROUP \
+  CONFIG_THERMAL CONFIG_CPU_THERMAL CONFIG_THERMAL_GOV_STEP_WISE \
+  CONFIG_QTI_THERMAL CONFIG_QTI_THERMAL_LIMITS_DCVS \
+  CONFIG_QTI_CPU_ISOLATE_COOLING_DEVICE CONFIG_QTI_CPU_HOTPLUG_COOLING_DEVICE \
+  CONFIG_QTI_CPU_VOLTAGE_COOLING_DEVICE CONFIG_QTI_BCL_SOC_DRIVER \
+  CONFIG_WQ_POWER_EFFICIENT_DEFAULT CONFIG_CMDLINE_EXTEND; do
   grep -q "^$config=y$" "$CFG" || fail "$config was dropped by olddefconfig"
 done
+grep -q '^# CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE is not set$' "$CFG" || \
+  fail "performance governor remains the configured CPU frequency default"
+grep -q '^# CONFIG_CMDLINE_FORCE is not set$' "$CFG" || \
+  fail "built-in command line would override bootloader arguments"
+grep -q '^# CONFIG_ARM_PSCI_CPUIDLE is not set$' "$CFG" || \
+  fail "Qualcomm LPM cpuidle must remain the platform idle driver"
+grep -Fqx "CONFIG_CMDLINE=\"cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR\"" "$CFG" || \
+  fail "requested cpuidle governor was not preserved in the appended kernel command line"
 
 step "install UAPI headers for BakaSU preinit codegen"
 make "${MAKE_ARGS[@]}" headers_install
@@ -289,6 +321,11 @@ AOSP Clang version: $CLANG_VERSION
 AOSP Clang fetch: pinned Gitiles subtrees; gzip/tar integrity checked; raw fallback blobs verified by Git object ID
 AnyKernel3 repository: $AK3_URL
 AnyKernel3 commit: $AK3_REF
+Default CPU frequency governor: schedutil (Android userspace may override at runtime)
+CPU idle governors: menu and TEO both built-in; requested default=$IDLE_GOVERNOR
+Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
+Command-line mode: bootloader arguments appended; forced override disabled
+Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
 EOF
 
 step "package and verify pinned AnyKernel3 for odin / Horizon Kernel Flasher"
