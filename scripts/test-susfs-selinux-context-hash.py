@@ -24,8 +24,18 @@ def function_body(source: str, name: str) -> str:
         if closing_paren < 0:
             continue
         opening_brace = closing_paren + 1
-        while opening_brace < len(source) and source[opening_brace].isspace():
-            opening_brace += 1
+        while opening_brace < len(source):
+            while opening_brace < len(source) and source[opening_brace].isspace():
+                opening_brace += 1
+            # Some versioned definitions place #endif between the signature and
+            # the shared opening brace, as pinned BakaSU does for 5.4/5.10.
+            if opening_brace >= len(source) or source[opening_brace] != "#":
+                break
+            directive_end = source.find("\n", opening_brace)
+            if directive_end < 0:
+                opening_brace = len(source)
+                break
+            opening_brace = directive_end + 1
         if opening_brace >= len(source) or source[opening_brace] != "{":
             continue
 
@@ -84,7 +94,8 @@ def main() -> None:
     hooks_path = root / "security/selinux/hooks.c"
     compat_path = root / "KernelSU/kernel/tools/kernel_compat.mk"
     hide_path = root / "KernelSU/kernel/feature/selinux_hide.c"
-    for path in (services_path, sidtab_path, hooks_path, compat_path, hide_path):
+    bakasu_kbuild_path = root / "KernelSU/kernel/Kbuild"
+    for path in (services_path, sidtab_path, hooks_path, compat_path, hide_path, bakasu_kbuild_path):
         if not path.is_file():
             fail(f"required integrated source is missing: {path.relative_to(root)}")
 
@@ -93,6 +104,7 @@ def main() -> None:
     hooks = hooks_path.read_text(encoding="utf-8")
     compat = compat_path.read_text(encoding="utf-8")
     hide = hide_path.read_text(encoding="utf-8")
+    bakasu_kbuild = bakasu_kbuild_path.read_text(encoding="utf-8")
 
     if not re.search(r"\bint\s+context_add_hash\s*\(", services):
         fail("the pinned SELinux services.c does not provide context_add_hash()")
@@ -145,19 +157,30 @@ def main() -> None:
         "BakaSU compatibility macro is not enabled when context_add_hash() exists",
     )
     require_pattern(
+        r"(?m)^\s*include\s+\$\(KSU_SRC\)/tools/kernel_compat\.mk\s*$",
+        bakasu_kbuild,
+        "BakaSU Kbuild does not include the compatibility makefile that enables the hash guard",
+    )
+    require_pattern(
+        r"(?m)^\s*kernelsu-objs\s*\+=\s*feature/selinux_hide\.o\s*$",
+        bakasu_kbuild,
+        "BakaSU selinux_hide.c is not included in the compiled KernelSU objects",
+    )
+    bakasu_sid_conversion = function_body(hide, "ksu_security_context_to_sid")
+    require_pattern(
         r"#ifdef\s+KSU_COMPAT_HAS_CONTEXT_ADD_HASH\s+"
         r"rc\s*=\s*context_add_hash\s*\(\s*policydb\s*,\s*&context\s*\)\s*;\s*"
-        r"#endif\s+if\s*\(\s*!rc\s*\)\s*"
+        r"if\s*\(\s*!rc\s*\)\s*#endif\s+"
         r"rc\s*=\s*sidtab_context_to_sid\s*\(\s*sidtab\s*,\s*&context\s*,\s*sid\s*\)",
-        hide,
-        "BakaSU primary SID conversion lost its #623 guarded hash initialization",
+        bakasu_sid_conversion,
+        "BakaSU primary SID conversion lost its #623 guarded hash initialization or failure short-circuit",
     )
     require_pattern(
         r"#ifdef\s+KSU_COMPAT_HAS_CONTEXT_ADD_HASH\s+"
         r"orig_rc\s*=\s*context_add_hash\s*\(\s*orig_policydb\s*,\s*&orig_context\s*\)\s*;\s*"
-        r"#endif\s+if\s*\(\s*!orig_rc\s*\)\s*\{\s*"
-        r".*?orig_rc\s*=\s*sidtab_context_to_sid\s*\(\s*orig_sidtab\s*,\s*&orig_context\s*,\s*&orig_sid\s*\)",
-        hide,
+        r"#endif\s+if\s*\(\s*!orig_rc\s*\)\s*"
+        r"orig_rc\s*=\s*sidtab_context_to_sid\s*\(\s*orig_sidtab\s*,\s*&orig_context\s*,\s*&orig_sid\s*\)",
+        bakasu_sid_conversion,
         "BakaSU backup SID conversion lost its #623 guarded hash initialization",
     )
 
