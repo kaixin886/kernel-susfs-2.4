@@ -110,3 +110,24 @@ bash scripts/test-odin-schedutil-fast-down.sh
 可在现有空间内完成的校验已通过：SUSFS port 文件集与 SHA-256、补丁空白检查、构建/实验脚本 shell 语法，以及将本分支的 `services.c`/`hooks.c` 叠加到只读集成树后运行的 SUSFS/BakaSU context-to-SID 静态回归检查。直接对未叠加当前修复的旧集成树运行回归检查会按预期失败；完整夹具的结果为 `PASS`。由于当前仅约 2.2 GB 可用，且没有确认可安全清理的本任务构建残留，未重试构建。
 
 BakaSU #35262 仍为独立 Manager 源码补丁；该 AnyKernel 包设计只含内核镜像，不含 Manager APK。没有 MIX 4 实机冷启动 Termux、待机、游戏或电池 A/B 数据；**静态回归通过不代表已验证运行成功，也不代表性能或省电收益。**
+
+
+## Kcompressd（独立实验分支 `feature/odin-kcompressd`）
+
+本分支基于已验证的 SUSFS 2.4 SID-fix 提交 `dc93390b87acbee7010ca4e9460d40ea5f1c0141`，目标为 Xiaomi MIX 4（`odin`）Linux 5.4.302。它与 LZ4K 分支/包分离，不修改 SUSFS 2.3、SID-fix 原分支或 daily-power 工作线。**本阶段不包含 MGLRU。**
+
+### 来源与 5.4 适配
+
+起点是 MediaTek 2025-04-30 的 [Kcompressd RFC v1](https://lore.kernel.org/lkml/20250430082651.3152444-1-qun-wei.lin@mediatek.com/)，它不是已合入 Linux 5.4 的实现；该提案基于较新的 folio 接口，不能直接套用。移植依据为固定 [Inkypen odin 源码提交 `50e0141`](https://github.com/Inkypen79/kernel_xiaomi_odin/commit/50e0141b29b62be21632c768e4818348098ac6cd)：5.4 的 `swap_writepage()` 在调用 `frontswap_store()` 前入队，worker 再按原顺序尝试 frontswap、回退到 `__swap_writepage()`。实现使用 per-node 有界 128 页环形队列与自旋锁，以适配 `CONFIG_MULTIPLE_KSWAPD=y` 的多个生产者；队列满时走原同步路径。
+
+此版本还显式交接仍锁定的页：入队取得额外页引用并暂置 writeback 屏障，worker 保持页锁直到原写回路径接管；常规异步 BIO 的额外引用由 end_io 在完成写回后释放，设备 `bdev_write_page()` 路径则由 worker 等待完成。每节点会跟踪已提交但未完成的异步 BIO；`kswapd_stop()` 先关闭新入队、排空并 join worker，再等待该节点 in-flight BIO 全部完成，之后才停止节点的 kswapd。上述路径专门针对该固定 5.4 树适配，不是对 RFC 代码的原样复制。
+
+### 默认关闭与手动开关
+
+构建时 `CONFIG_KCOMPRESSD=y`，但运行时 `vm.kcompressd` 默认是 **0（不入队）**。Kcompressd 线程仍会在有内存的节点上启动并空闲等待；每节点固定环形队列也保留 128 个页指针（约 1 KiB），`0` 不会撤销线程或回收这些状态。若后续在已确认可恢复的测试环境中明确要启用，可设置一个不超过 128 的队列上限；例如 `echo 16 > /proc/sys/vm/kcompressd`。写入 `0` 会停止新页入队，现有队列仍会排空。它是待处理页数上限，不是压缩率、内存预留或性能保证。没有完成实机验证前，不建议在日常启动中开启。
+
+### 测试与限制
+
+构建前会运行 `scripts/test-kcompressd-5.4.py`，检查固定源码上的队列边界、页锁/writeback handoff、frontswap 顺序、异步 BIO 页引用与 in-flight drain、swapoff 写回等待及节点停止顺序；source adapter 会检查精确源码锚点并支持幂等重入。GitHub Actions 预定执行 arm64 `Image` 构建并打包 AnyKernel ZIP，产物会标明 `Kcompressd`、目标设备/内核与 `UNTESTED`，来源清单记录 adapter、worker 和测试哈希。
+
+这些静态检查不能替代完整编译，也不证明 zswap/PF_MEMALLOC 递归回收、suspend、swapoff 并发或 memory-hotplug 已通过运行时验证。**目前没有 MIX 4 实机启动、Termux、swapoff/热插拔压力测试或性能/能耗 A/B 数据；不宣称 Kcompressd 已提升性能或省电。** MediaTek 手持设备的 RFC 测量不代表 MIX 4 结果。实机验证通过前保持默认关闭。

@@ -25,9 +25,10 @@ AOSP_CLANG_TAG="android-17.0.0_r1"
 AOSP_CLANG_REF="29182889399818f97baa65ea238c80e8117981eb"
 CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
+KCOMPRESSD_RFC_URL="https://lore.kernel.org/lkml/20250430082651.3152444-1-qun-wei.lin@mediatek.com/"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-Kcompressd-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -39,6 +40,8 @@ case "$IDLE_GOVERNOR" in
 esac
 sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors"
 bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profile test has shell syntax errors"
+python3 -m py_compile "$ROOT/scripts/apply-kcompressd.py" "$ROOT/scripts/test-kcompressd-5.4.py" || fail "Kcompressd Python tooling has syntax errors"
+[[ -s "$ROOT/port/kcompressd/mm/kcompressd.c" ]] || fail "missing Kcompressd worker source"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -196,6 +199,9 @@ git -C "$KSRC/KernelSU" reset -q --mixed "$BAKASU_REF"
 [[ "$(git -C "$KSRC/KernelSU" diff --name-only)" == "$BAKASU_MANAGER_FIX_PATH" ]] || fail "BakaSU integration contains unexpected working-tree changes"
 BAKASU_MANAGER_PATCH_SHA256="$(git -C "$KSRC/KernelSU" diff --binary "$BAKASU_REF" -- "$BAKASU_MANAGER_FIX_PATH" | sha256sum | awk '{print $1}')"
 RUNTIME_PROFILE_SHA256="$(sha256sum "$ROOT/scripts/odin-schedutil-fast-down.sh" | awk '{print $1}')"
+KCOMPRESSD_ADAPTER_SHA256="$(sha256sum "$ROOT/scripts/apply-kcompressd.py" | awk '{print $1}')"
+KCOMPRESSD_WORKER_SHA256="$(sha256sum "$ROOT/port/kcompressd/mm/kcompressd.c" | awk '{print $1}')"
+KCOMPRESSD_TEST_SHA256="$(sha256sum "$ROOT/scripts/test-kcompressd-5.4.py" | awk '{print $1}')"
 
 step "overlay verified SUSFS v2.4.0 port (upstream reference $SUSFS_UPSTREAM_REF)"
 cp -a "$ROOT/port/out/." "$KSRC/"
@@ -266,6 +272,12 @@ step "run SELinux context-to-SID hash regression checks"
 python3 "$ROOT/scripts/test-susfs-selinux-context-hash.py" "$KSRC" || \
   fail "SUSFS/BakaSU SELinux context-to-SID regression checks failed"
 
+step "apply pinned odin Linux 5.4.302 Kcompressd backport and run static regressions"
+python3 "$ROOT/scripts/apply-kcompressd.py" "$KSRC" "$ROOT/port/kcompressd/mm/kcompressd.c" || \
+  fail "Kcompressd 5.4 source adapter refused or failed"
+python3 "$ROOT/scripts/test-kcompressd-5.4.py" "$KSRC" || \
+  fail "Kcompressd 5.4 static regression checks failed"
+
 step "configure odin_defconfig"
 make "${MAKE_ARGS[@]}" odin_defconfig
 CFG="$KOUT/.config"
@@ -280,12 +292,14 @@ CFG="$KOUT/.config"
   --enable CPU_FREQ_GOV_SCHEDUTIL \
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
   --enable CPU_FREQ_GOV_PERFORMANCE \
+  --enable KCOMPRESSD \
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
   --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
 make "${MAKE_ARGS[@]}" olddefconfig
 for config in \
   CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD \
   CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
+  CONFIG_KCOMPRESSD \
   CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL CONFIG_CPU_FREQ_GOV_PERFORMANCE \
   CONFIG_CPU_IDLE_GOV_MENU CONFIG_CPU_IDLE_GOV_TEO CONFIG_ARM_QCOM_LPM_CPUIDLE \
   CONFIG_NO_HZ_IDLE CONFIG_RCU_FAST_NO_HZ CONFIG_RCU_NOCB_CPU \
@@ -342,6 +356,13 @@ BakaSU Manager #35262 WebView fix commit: $BAKASU_MANAGER_FIX_REF
 BakaSU Manager fix path: $BAKASU_MANAGER_FIX_PATH
 BakaSU Manager patch SHA-256: $BAKASU_MANAGER_PATCH_SHA256
 BakaSU Manager fix is source-only; the AnyKernel3 ZIP contains the kernel Image, not a Manager APK
+Kcompressd upstream reference: $KCOMPRESSD_RFC_URL (MediaTek RFC v1, not a merged Linux 5.4 implementation)
+Kcompressd target adaptation: page-based odin Linux 5.4.302; CONFIG_KCOMPRESSD=y in this build, vm.kcompressd defaults to 0
+Kcompressd runtime activation: opt-in via vm.kcompressd; queue depth 0..128; queue depth is bounded per node
+Kcompressd source adapter SHA-256: $KCOMPRESSD_ADAPTER_SHA256
+Kcompressd worker source SHA-256: $KCOMPRESSD_WORKER_SHA256
+Kcompressd static regression test SHA-256: $KCOMPRESSD_TEST_SHA256
+Kcompressd MGLRU: not included
 AOSP Clang repository: $AOSP_CLANG_URL
 AOSP Clang tag: $AOSP_CLANG_TAG
 AOSP Clang commit: $CLANG_ACTUAL_REF
