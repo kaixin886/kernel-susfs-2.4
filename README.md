@@ -15,6 +15,14 @@
 
 构建集成前和完成后分别复查远端，BakaSU `sync-up` 最新 HEAD 均为 `55f3dcb…`；该提交不包含 #35262。`7b65bde…` 可干净地单独叠加，只修改 `manager/app/src/main/java/org/bakasu/bakasu/ui/webui/WebViewInterface.kt`，补上主线程派送与 WebView 空值保护。按实际应用到 pinned `sync-up` 的 binary diff 计算，补丁 SHA-256 为 `cff8e5ee87b477ec30bc93fffadb739835987b62cff4a92595c914a3c746520c`。内核 `selinux_hide` 保持原样，`sync-up` 的 Manager API 修改也保留。该补丁是 Manager 源码修复，不是内核改动；AnyKernel ZIP 不含 Manager APK，不会更新 Manager。
 
+## 当前 SELinux 修复分支
+
+`fix/susfs24-selinux-context-sid` 从已核实的 `tune/sm8350-aggressive` tip `f571ef08ea82f0bf41ed42eadc3edb7296cf6ed2` 单独创建。本分支只修复 SUSFS 2.4 的 SELinux context-to-SID 路径，保留该基线已有的功耗/调度配置，不改任何其他分支，也不新增 Scene 抢写的调度参数。
+
+5.4.302 的原生 `context_struct_to_sid()` 会在 `sidtab_context_to_sid()` 前调用 `context_add_hash()`；`sidtab` 用 `context->hash` 查找和去重。SUSFS 2.4 自己的 core 路径跳过原生 helper，直接调用 SID 表。本修复让 SUSFS 在解析/过滤完 context 后复用原生 hash-aware helper。BakaSU `sync-up` 的 #623 主/backup sidtab 修复和 `KSU_COMPAT_HAS_CONTEXT_ADD_HASH` 检测保持不变；不关闭隐藏、不改 enforcing、不放宽 SELinux policy。
+
+目标 ROM 标签按设备所有者确认的 Inkypen LineageOS 24.0 GApps / Android 17 标记。包名会明确标注 `UNTESTED`：静态检查和编译不能替代设备冷启动 Termux A/B；不刷机，也不宣称已实机验证。
+
 ## 动态省电的策略边界
 
 本分支不把 CPU 固定在高频，也不硬编码某款游戏的频率/核心亲和性。策略由内核调度器、设备 ROM 的 Power HAL 和 SoC 热管理分层完成：
@@ -26,16 +34,24 @@
 
 基于此，**不加常驻轮询 `dumpsys`/前台应用的脚本**：它会主动唤醒 CPU，可能影响息屏省电，还可能与 ROM 的 Power HAL、thermal/DCVS 抢写。自动识别游戏和屏幕状态需要目标 ROM 的电源 HAL/系统服务，而不是只改内核即可安全完成。
 
+Scene 官方[更新频道](https://t.me/s/scene2023)目前可见的最新版是 N1 2026.10 Beta14；Scene 9.x 的公告另列 9.4.17 Alpha（2026-08-21）和 9.4.11 稳定版（2026-08-09）。官方[主页](https://omarea.com/)把 Scene4 4.7.3 标为开放源码产品，另列 SCENE N1，但没有 N1 的源码链接。N1 26.09 Alpha8 的[官方更新记录](https://t.me/scene2023/405)提到 Launcher Boost 区分冷/热启动并使用不同持续时间，说明启动 boost 本身也是 Scene 控制的一部分。
+
+按用户确认，当前实际使用的是[星野 Scene 仓库](https://github.com/xingyeovo/HoshinoScene-oss)最新发布版，并将其视为与原版行为一致的 Scene 参考；该仓当前 release 标注 N1 2026.10 Alpha14Lite / v1.2.1（2026-10-10）。官方频道的 N1 标号已到 Beta14，两者版本标签不同；官方 N1 源码没有公开链接，因此只依据用户确认使用星野版和其公开重建代码判断当前行为，不把它误标为官方源代码。仓库 [`docs/RECOVERY.md`](https://github.com/xingyeovo/HoshinoScene-oss/blob/de840c7927cf58747428a52309fb73f6c29b8c87/docs/RECOVERY.md)说明该工程由 APK 解包/JADX 还原而来。
+
+星野 LP profile 会从云端 `/cloud-scheduler2` 按平台/版本下载 `powercfg.sh` 与 `manifest.json`（[LP 加载代码](https://github.com/xingyeovo/HoshinoScene-oss/blob/de840c7927cf58747428a52309fb73f6c29b8c87/app/src/main/java/a/um0.java)）；仓库没有你设备当前实际收到的 profile。其通用框架能写 cluster governor、频率上下限和 governor 参数（[调度执行代码](https://github.com/xingyeovo/HoshinoScene-oss/blob/de840c7927cf58747428a52309fb73f6c29b8c87/app/src/main/java/a/gb0.java)），但无法静态证明 LP 没有写 `schedutil` rate-limit 节点。故本分支不加入 Scene 专属或默认调度改动；在拿到设备上的 `/data/powercfg.sh` 或实际写入日志前，也不要一边运行 Scene LP、一边应用本仓的 `fast-down` 实验。`down_rate_limit_us=0` 是否能更快回落、是否仍保留启动响应和游戏帧时间，都需 MIX 4 上的 A/B 验证。
+
 ## 本分支新增的可回滚实验
 
 新增 `scripts/odin-schedutil-fast-down.sh`。在 schedutil 仍负责动态升降频的前提下，用户可手动把每个 policy 的 `down_rate_limit_us` 临时设成 `0`，让负载下降后更快尝试降频；`up_rate_limit_us` 保持不变。这是息屏/短时负载后的省电候选值，不是保证收益的默认策略，也不等同于按游戏/息屏自动切换。
 
 脚本提供 `status`、`apply`、`restore`：`apply` 只在所有 policy 都是 schedutil 时才执行，先保存每个 policy 原始 up/down 值；`restore` 在同一次启动中逐项恢复。状态文件只允许 root 访问并带 boot ID；如果设备已重启，脚本只清除旧快照、不把旧值写进新启动策略。脚本不会改 governor、频率上限、OPP/电压、CPU 拓扑、IRQ、热管理或开机行为。任何卡顿、续航/温度回退或异常时可运行 `restore`；重启也会回到内核/ROM 自身默认策略。
 
+此脚本会改写 schedutil 调速参数；Scene LP 配置按平台/版本从云端下载，当前没有设备侧脚本可证明两者不重叠。**Scene LP 正常控制时不要运行 `apply`**，除非先确认其实际配置没有写这些 policy tunables。SELinux SID 修复本身不改调度节点。
+
 从 AnyKernel ZIP 导出脚本到设备后运行：
 
 ```sh
-unzip -p out/odin-susfs-v2.4.0-bakasu-ak3.zip tools/odin-schedutil-fast-down.sh > /tmp/odin-schedutil-fast-down.sh
+unzip -p out/Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-UNTESTED.zip tools/odin-schedutil-fast-down.sh > /tmp/odin-schedutil-fast-down.sh
 adb push /tmp/odin-schedutil-fast-down.sh /data/local/tmp/odin-schedutil-fast-down.sh
 adb shell su -c 'sh /data/local/tmp/odin-schedutil-fast-down.sh status'
 adb shell su -c 'sh /data/local/tmp/odin-schedutil-fast-down.sh apply'
@@ -56,7 +72,13 @@ odin 基线已带 WALT/uclamp、schedutil、Qualcomm LPM、zram、NO_HZ/RCU、QT
 JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh
 ```
 
-默认 `IDLE_GOVERNOR=teo`；可设 `IDLE_GOVERNOR=menu` 做 idle governor 对照。构建脚本校验 SUSFS 文件清单与哈希、所有来源 pin、BakaSU WebView 补丁只触及预期 Manager 文件、profile 脚本语法和关键配置；包内 Image 与独立 Image 会逐字节比较，ZIP 清单和完整性会检查，`source-pins.txt` 记录固定 SHA 和运行时 profile SHA-256。产物位于 `out/`。
+默认 `IDLE_GOVERNOR=teo`；可设 `IDLE_GOVERNOR=menu` 做 idle governor 对照。构建脚本会在集成 SUSFS 与 BakaSU 的源码树上运行 SELinux context-to-SID 静态回归检查，再校验 SUSFS 文件清单与哈希、所有来源 pin、BakaSU WebView 补丁只触及预期 Manager 文件、profile 脚本语法和关键配置；包内 Image 与独立 Image 会逐字节比较，ZIP 清单和完整性会检查，`source-pins.txt` 记录固定 SHA 和运行时 profile SHA-256。产物位于 `out/`。
+
+可对已集成 SUSFS/BakaSU 的 Linux 5.4 源码树单独重跑 SELinux 静态检查：
+
+```sh
+python3 scripts/test-susfs-selinux-context-hash.py /path/to/integrated/kernel
+```
 
 可重复运行 mock-sysfs 回归测试（需要 root 或 sudo）：
 
@@ -81,12 +103,8 @@ bash scripts/test-odin-schedutil-fast-down.sh
 
 ## 构建结果
 
-2026-11-18 00:44（UTC+8）以 `JOBS=8 INSTALL_DEPS=0` 完成固定 arm64 全量构建，退出码为 0；内核版本串为 `5.4.302-inkypen-v2`。AOSP Clang `android-17.0.0_r1` / `2918288…` 的全部固定子树均通过校验；下载 `musl` 子树时一次 HTTP 503 后重试成功并通过哈希校验。
+本修复分支尚未完成全量构建，也没有生成本分支对应的 `UNTESTED` ZIP。`JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh` 在固定 AOSP Clang `android-17.0.0_r1` 的 `bin` 子树抓取阶段因空间不足（`No space left on device`）退出；因此本次修复没有新的 `.config`、Image 或 ZIP 可供验收。当前 `out/` 中保留的包来自之前的调度实验分支，不是本 SID 修复包，请勿用于验证本修复。
 
-最终 `.config` 已确认 `CONFIG_CPU_FREQ=y`，默认 governor 为 schedutil（performance governor 仍编入以供平台切换），WALT、uclamp task/group、Qualcomm LPM、TEO、NO_HZ/RCU、QTI thermal/DCVS 及 CPU isolation/hotplug/voltage cooling 配置保留；TEO 由追加的 `cpuidle.governor=teo` 请求，强制替换 bootloader 命令行仍关闭。SUSFS、BakaSU 和关键配置断言均通过。
+可在现有空间内完成的校验已通过：SUSFS port 文件集与 SHA-256、补丁空白检查、构建/实验脚本 shell 语法，以及将本分支的 `services.c`/`hooks.c` 叠加到只读集成树后运行的 SUSFS/BakaSU context-to-SID 静态回归检查。直接对未叠加当前修复的旧集成树运行回归检查会按预期失败；完整夹具的结果为 `PASS`。由于当前仅约 2.2 GB 可用，且没有确认可安全清理的本任务构建残留，未重试构建。
 
-构建和独立复核均通过：SUSFS 文件集/哈希、源码 pin、mock-sysfs 四项回归、`sha256sum -c out/SHA256SUMS`、ZIP 完整性、ZIP 恰为 pinned AnyKernel3 模板文件集的 29 项，且包内 Image 和 fast-down 脚本分别与构建产物/源码逐字节一致。`out/Image` SHA-256 为 `16f1427e137d9e02fa4f3f0f7ea9ad3dcfc07b9cd7ec9d4041908e84379748f4`；`out/odin-susfs-v2.4.0-bakasu-ak3.zip` SHA-256 为 `22eaca72083e59757cc738392ea78c85246ee516218ea59229fe4c5020e9a6ca`。其余产物哈希列在 `out/SHA256SUMS`；运行时脚本 SHA-256 为 `86c2047f569b6aecd8a06401c0f0093be4bfb35f404429735d2c50c4a040d38e`。
-
-**已知构建告警：** 固定上游 `drivers/thermal/thermal_core.c` 有三条 `-Wfortify-source` 告警（第 1895、1976、1995 行，`PAGE_SIZE` 参数 4096 大于 128 字节目标缓冲区）；MODPOST 另提示 `embms_tm_multicast_recv` 是 static `EXPORT_SYMBOL`。Kconfig 还报告 schedutil 默认和 KSU_SUSFS 选择项被显式覆盖；最终 `.config` 断言通过。这些内核源文件没有被本分支修改；为遵守保留热管理的要求，未对 thermal 代码做未经验证的改写。无编译错误。
-
-BakaSU #35262 的路径、单文件范围、干净应用和实际 binary diff SHA 已验证；未生成 Manager APK，也未运行 Manager Gradle 编译，因为环境未提供 Android SDK（`ANDROID_HOME`/`ANDROID_SDK_ROOT` 均未配置）。没有 MIX 4 实机启动、待机、游戏或电池 A/B 数据；**构建通过不代表已验证启动安全、性能提升或省电收益。**
+BakaSU #35262 仍为独立 Manager 源码补丁；该 AnyKernel 包设计只含内核镜像，不含 Manager APK。没有 MIX 4 实机冷启动 Termux、待机、游戏或电池 A/B 数据；**静态回归通过不代表已验证运行成功，也不代表性能或省电收益。**

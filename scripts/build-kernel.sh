@@ -27,7 +27,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="odin-susfs-v2.4.0-bakasu-ak3.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -262,6 +262,10 @@ for hook in \
   grep -Rqs "$hook" "$KSRC/fs" "$KSRC/kernel" "$KSRC/drivers/input" || fail "missing BakaSU inline hook call site: $hook"
 done
 
+step "run SELinux context-to-SID hash regression checks"
+python3 "$ROOT/scripts/test-susfs-selinux-context-hash.py" "$KSRC" || \
+  fail "SUSFS/BakaSU SELinux context-to-SID regression checks failed"
+
 step "configure odin_defconfig"
 make "${MAKE_ARGS[@]}" odin_defconfig
 CFG="$KOUT/.config"
@@ -330,6 +334,10 @@ KBUILD_BUILD_VERSION: $KBUILD_BUILD_VERSION
 Compiler path normalization: -ffile-prefix-map=<KSRC>=kernel-src and -ffile-prefix-map=<KOUT>=kernel-out in KCFLAGS/KAFLAGS
 BakaSU repository: $BAKASU_URL
 BakaSU latest sync-up tip pinned at integration: $BAKASU_REF
+BakaSU #623 context_add_hash compatibility check: enabled by pinned kernel_compat.mk when available
+SUSFS SELinux SID fix: susfs_security_context_to_sid_core delegates to 5.4 context_struct_to_sid() hash-aware helper
+SUSFS/BakaSU SELinux SID static regression test: scripts/test-susfs-selinux-context-hash.py passed before build
+Target ROM label: Inkypen LineageOS 24.0 GApps / Android 17 (user-reported; device runtime A/B pending)
 BakaSU Manager #35262 WebView fix commit: $BAKASU_MANAGER_FIX_REF
 BakaSU Manager fix path: $BAKASU_MANAGER_FIX_PATH
 BakaSU Manager patch SHA-256: $BAKASU_MANAGER_PATCH_SHA256

@@ -3964,7 +3964,7 @@ str = NULL;
 } else if (rc) {
 goto out_unlock;
 }
-rc = sidtab_context_to_sid(sidtab, &context, sid);
+rc = context_struct_to_sid(state, &context, sid);
 context_destroy(&context);
 out_unlock:
 read_unlock(&state->ss->policy_rwlock);
