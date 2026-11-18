@@ -18,6 +18,12 @@
 - 在独立的完整目标源码 worktree 中应用补丁并运行 `odin_defconfig`/`olddefconfig`：`CONFIG_LRU_GEN=y`，`CONFIG_LRU_GEN_ENABLED` 和 `CONFIG_LRU_GEN_STATS` 均未设置；thermal、CPU thermal、QTI thermal/DCVS 与各 cooling/BCL 配置仍全部为 `y`。
 - `scripts/test-odin-mglru.py` 校验补丁哈希、目标 pin、设备适用路径、exec 钩子、MGLRU reclaim 分流、保留的旧 reclaim 调用、运行时文档和 thermal 配置。
 
+## 完整构建验证
+
+- 固定 AOSP Clang 22.0.2 的本地完整 `Image`/AnyKernel 构建成功；本地 SHA256SUMS 检查通过，AnyKernel ZIP 清单与包内 `Image` 校验通过。本地 `Image` 为 37,294,592 bytes，SHA-256：`8f6bfb0ff526f27bc7af66828b8a6c3c4e8d510d5ec500b899c9872800fc8f0d`；ZIP SHA-256：`207a871e2405931aee873a6af26d546505a3a6955d86479b602fec5c928e923b`。
+- [GitHub Actions run 44414002675](https://github.com/kaixin886/kernel-susfs-2.4/actions/runs/44414002675) 的补丁、配置、完整构建、ZIP 校验及 artifact 上传步骤均成功；[artifact 14479698893](https://github.com/kaixin886/kernel-susfs-2.4/actions/runs/44414002675/artifacts/14479698893)。云端 `Image` 同为 37,294,592 bytes，SHA-256：`092d6f712b79e8bcabafa0062f6f8eaf9901b1d6e16b3b2d0749b86fa0b49907`；ZIP SHA-256：`1ae403398515f44f4ac8fe3f219a9a38d4f1b3696dfa65f53bc18ec22bba453e`。云端 ZIP 内 `Image` 与该云端独立 `Image` 一致。
+- 两次构建的 `kernel.config` SHA-256 相同（`a689bfacfa8441b4af69b68252b7ec6135afcb7be911b82e709f2761e1e528f3`），`source-pins.txt` SHA-256 也相同（`af80c389f8cbc589aae36582aac8e53449a4de5a9e044ca317cd2750430935db`），但 `Image` 字节并不相同。两侧都是 Ubuntu 24.04 系列环境（Actions 镜像版本为 `20261116.376`），且配置启用 `CONFIG_LTO_CLANG=y`；这些环境因素尚不能解释或证明差异原因，现有 artifact 不含中间对象，故不宣称位级可复现。两个构建各自通过，不代表运行时或性能验证。
+
 ## 仍待验证
 
-尚未完成固定 AOSP Clang 下的完整 `Image`/AnyKernel 构建，也未执行 GitHub 云构建或 MIX 4 实机启动、内存压力、息屏耗电、游戏帧时间和温控 A/B。补丁应用和 Kconfig 通过不代表编译、启动安全或实机收益；应保持默认关闭，待完整编译与设备侧验证后再考虑开启。
+尚未执行 MIX 4 实机启动、内存压力、息屏耗电、游戏帧时间和温控 A/B；因此不声称设备启动安全、功耗/性能收益或 thermal 实测结果。MGLRU 编译接线已启用但运行时默认关闭；先在备份和可恢复条件下完成设备侧验收，再考虑运行时开启。

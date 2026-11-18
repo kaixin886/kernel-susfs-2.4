@@ -50,4 +50,4 @@ JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh
 
 保持 ROM、亮度、刷新率、网络、室温和电量区间一致，先测旧内核，再测此分支，最后恢复旧内核（A/B/A）。记录息屏耗电与唤醒源、CPUFreq policy 实际 governor/rate-limit、cpuidle residency；日常记录触摸到首帧、滚动掉帧；游戏记录帧时间 P50/P95/P99、温度及 thermal 限频。若续航没有稳定改善或交互/游戏退化，恢复此前可启动的内核。构建或 ZIP 校验通过也不能替代冷启动、Termux、网络、相机/音频、休眠唤醒和热控实测。
 
-**当前状态：** MGLRU 补丁已在固定 odin 源码和 SUSFS overlay 后通过 whitespace 严格应用检查；`odin_defconfig`/`olddefconfig` 验证 `CONFIG_LRU_GEN=y`、默认关闭 MGLRU，并确认 thermal protections 仍启用。源码与配置回归测试通过；完整 `Image`/AnyKernel 编译、GitHub 云构建及 MIX 4 启动和 A/B 功耗/性能测试仍未验证。
+**当前状态：** 固定 Clang 下的本地完整编译与 [GitHub Actions 云构建](https://github.com/kaixin886/kernel-susfs-2.4/actions/runs/44414002675)均通过；配置确认 MGLRU 默认关闭且 thermal protections 保留。两次构建的 `.config` 和来源清单相同，但 `Image` 二进制哈希不同，因此不宣称位级可复现；以 CI artifact 为正式构建候选。MIX 4 实机启动、内存压力、息屏耗电和游戏 A/B 尚未验证，ZIP 继续标为 `UNTESTED`。
