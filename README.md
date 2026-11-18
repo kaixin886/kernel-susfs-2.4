@@ -42,9 +42,9 @@ Scene 官方[更新频道](https://t.me/s/scene2023)目前可见的最新版是 
 
 对照了五个骁龙 888 魔改内核：[engstk/op9](https://github.com/engstk/op9/commit/2a97f7d42aaf1848cc528d0a67e09d39f0218f6d)、[Aesir SM8350](https://github.com/bcrtvkcs/aesir_kernel_oneplus_sm8350/commit/d41024e08108d2a9e05fa32431222696f5ac378d)、[Feather](https://github.com/ozyern/Feather-Kernel-SM8350/commit/79f7aa8fe53e953dd0fa4759994f872d9bf106d1)、[Xiaomi mars](https://github.com/EcrosoftXiao/kernel_xiaomi_mars/commit/7e68a9f6d1fe092611d2b427c1773195a1605fd1) 和 [EndCredits MIUI SM8350](https://github.com/EndCredits/android_kernel_xiaomi_sm8350-miui/commit/6cb9f5a9edc161abda546ee23c8f8ba741655746)。它们有 MSM/Oplus/MI display blank 通知，但可见消费者主要是触控、充电/PMIC、LED 或 thermal screen-state 同步；没有发现 blank 直接触发 CPUFreq、cpuidle、调度或内存省电策略。odin 固定 5.4.302 树里的 Qualcomm cpufreq PM 通知只处理真正的 system suspend/resume，不等于用户锁屏。因设备实际 Scene LP 脚本未公开，也无法证明这些机制中有哪项是 Scene 覆盖不到的；本分支因此不加新的屏灭调频/限频策略，也不移植其他机型 OPP、电压、thermal、IRQ 或 GPU 数值。
 
-## 本分支新增的可回滚实验
+## 指定基线继承的可回滚调速实验
 
-新增 `scripts/odin-schedutil-fast-down.sh`。在 schedutil 仍负责动态升降频的前提下，用户可手动把每个 policy 的 `down_rate_limit_us` 临时设成 `0`，让负载下降后更快尝试降频；`up_rate_limit_us` 保持不变。这是息屏/短时负载后的省电候选值，不是保证收益的默认策略，也不等同于按游戏/息屏自动切换。
+`scripts/odin-schedutil-fast-down.sh` 继承自本分支的指定基线 `tune/sm8350-aggressive`；本 SID 修复分支没有修改或自动执行它。该脚本在 schedutil 仍负责动态升降频的前提下，允许用户手动把每个 policy 的 `down_rate_limit_us` 临时设成 `0`，让负载下降后更快尝试降频；`up_rate_limit_us` 保持不变。这是息屏/短时负载后的省电候选值，不是保证收益的默认策略，也不等同于按游戏/息屏自动切换。
 
 脚本提供 `status`、`apply`、`restore`：`apply` 只在所有 policy 都是 schedutil 时才执行，先保存每个 policy 原始 up/down 值；`restore` 在同一次启动中逐项恢复。状态文件只允许 root 访问并带 boot ID；如果设备已重启，脚本只清除旧快照、不把旧值写进新启动策略。脚本不会改 governor、频率上限、OPP/电压、CPU 拓扑、IRQ、热管理或开机行为。任何卡顿、续航/温度回退或异常时可运行 `restore`；重启也会回到内核/ROM 自身默认策略。
 
