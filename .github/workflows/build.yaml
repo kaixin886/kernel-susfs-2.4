@@ -1,4 +1,4 @@
-name: Build kernel-susfs-2.4: odin SUSFS v2.4.0 + BakaSU
+name: "Build kernel-susfs-2.4: odin SUSFS v2.4.0 + BakaSU"
 
 on:
   workflow_dispatch:
