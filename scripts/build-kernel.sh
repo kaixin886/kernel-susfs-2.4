@@ -27,7 +27,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-LZ4K-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -112,6 +112,7 @@ subprocess.run(["sha256sum", "-c", "port/SHA256SUMS"], cwd=root, check=True)
 print("local port tree file set and checksums: PASS")
 PYEOF
 PORT_MANIFEST_SHA256="$(sha256sum "$PORT_MANIFEST" | awk '{print $1}')"
+LZ4K_PATCH_SHA256="$(sha256sum "$ROOT/port/lz4k/openEuler-pr-1277.patch" | awk '{print $1}')"
 
 if [[ "${INSTALL_DEPS:-1}" == 1 ]]; then
   step "install host build dependencies"
@@ -121,6 +122,7 @@ if [[ "${INSTALL_DEPS:-1}" == 1 ]]; then
     cpio zip unzip rsync python3 git curl wget xz-utils zstd patch \
     build-essential gcc-aarch64-linux-gnu
 fi
+python3 "$ROOT/scripts/test_lz4k.py" || fail "LZ4K codec or 5.4 adapter regression failed"
 
 step "fetch pinned Inkypen 5.4 baseline"
 git init -q "$KSRC"
@@ -128,6 +130,10 @@ git -C "$KSRC" remote add origin "$KERNEL_URL"
 git -C "$KSRC" fetch --depth=1 origin "$KERNEL_REF"
 git -C "$KSRC" checkout --detach -q FETCH_HEAD
 [[ "$(git -C "$KSRC" rev-parse HEAD)" == "$KERNEL_REF" ]] || fail "kernel checkout is not the pinned $KERNEL_REF"
+
+step "apply optional LZ4K zram compressor with 5.4 compatibility adapters"
+python3 "$ROOT/scripts/apply_lz4k_patch.py" "$KSRC" || fail "LZ4K source integration failed"
+
 SOURCE_DATE_EPOCH="$(git -C "$KSRC" show -s --format=%ct HEAD)"
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || fail "could not derive SOURCE_DATE_EPOCH from the pinned kernel commit"
 export SOURCE_DATE_EPOCH
@@ -269,6 +275,7 @@ python3 "$ROOT/scripts/test-susfs-selinux-context-hash.py" "$KSRC" || \
 step "configure odin_defconfig"
 make "${MAKE_ARGS[@]}" odin_defconfig
 CFG="$KOUT/.config"
+ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
 # Use scheduler-driven CPU frequency scaling and a testable TEO idle policy.
 # Keep performance/menu compiled, preserve Qualcomm LPM, and let the bootloader
 # append its arguments rather than forcing a replacement kernel command line.
@@ -277,15 +284,20 @@ CFG="$KOUT/.config"
   --enable EXT4_FS --enable HEADERS_INSTALL \
   --enable KSU_SUSFS --enable KSU_SUSFS_AVD \
   --enable KSU_SUSFS_PRIORITY_UID_FILTER \
+  --enable CRYPTO_LZ4K \
   --enable CPU_FREQ_GOV_SCHEDUTIL \
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
   --enable CPU_FREQ_GOV_PERFORMANCE \
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
   --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
 make "${MAKE_ARGS[@]}" olddefconfig
+ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
+[[ "$ZRAM_KCONFIG_BEFORE" == "$ZRAM_KCONFIG_AFTER" ]] || \
+  fail "LZ4K integration changed existing zram configuration/default"
 for config in \
   CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD \
-  CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
+  CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CRYPTO_LZ4K \
+  CONFIG_LZ4K_COMPRESS CONFIG_LZ4K_DECOMPRESS CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
   CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL CONFIG_CPU_FREQ_GOV_PERFORMANCE \
   CONFIG_CPU_IDLE_GOV_MENU CONFIG_CPU_IDLE_GOV_TEO CONFIG_ARM_QCOM_LPM_CPUIDLE \
   CONFIG_NO_HZ_IDLE CONFIG_RCU_FAST_NO_HZ CONFIG_RCU_NOCB_CPU \
@@ -320,6 +332,10 @@ grep -o '"[^"]*"' "$KOUT/include/generated/utsrelease.h" | head -1 | tr -d '"' >
 cat > "$OUT_STAGE/source-pins.txt" <<EOF
 Kernel URL: $KERNEL_URL
 Kernel commit: $KERNEL_REF
+LZ4K source: openEuler kernel PR #1277; original two-commit patch
+LZ4K upstream patch SHA-256: $LZ4K_PATCH_SHA256
+LZ4K Linux 5.4 adaptations: select CRYPTO_ACOMP2; zcomp backend inserted before NULL sentinel
+LZ4K build config: CONFIG_CRYPTO_LZ4K=y; runtime selectable, existing zram default and boot command line unchanged
 SUSFS upstream URL: $SUSFS_UPSTREAM_URL
 SUSFS upstream branch: $SUSFS_UPSTREAM_BRANCH
 SUSFS upstream HEAD/reference: $SUSFS_UPSTREAM_REF

@@ -110,3 +110,22 @@ bash scripts/test-odin-schedutil-fast-down.sh
 可在现有空间内完成的校验已通过：SUSFS port 文件集与 SHA-256、补丁空白检查、构建/实验脚本 shell 语法，以及将本分支的 `services.c`/`hooks.c` 叠加到只读集成树后运行的 SUSFS/BakaSU context-to-SID 静态回归检查。直接对未叠加当前修复的旧集成树运行回归检查会按预期失败；完整夹具的结果为 `PASS`。由于当前仅约 2.2 GB 可用，且没有确认可安全清理的本任务构建残留，未重试构建。
 
 BakaSU #35262 仍为独立 Manager 源码补丁；该 AnyKernel 包设计只含内核镜像，不含 Manager APK。没有 MIX 4 实机冷启动 Termux、待机、游戏或电池 A/B 数据；**静态回归通过不代表已验证运行成功，也不代表性能或省电收益。**
+
+
+## 可选 LZ4K zram 压缩器（`feature/odin-lz4k-zram`）
+
+本功能分支基于已验证的 SID-fix 提交 `dc93390b87acbee7010ca4e9460d40ea5f1c0141` 单独创建；不修改 SID-fix、`tune/odin-daily-power`、现有内核包或 SUSFS 2.3 仓库 `kaixin886/odin-kernel-susfs`。
+
+codec 和 crypto API 以 [openEuler kernel PR #1277](https://gitee.com/openeuler/kernel/pulls/1277.patch) 为上游参考。原始两提交补丁保存在 `port/lz4k/openEuler-pr-1277.patch`，SHA-256：`51f0fe4e7e2b9bdc782a59f7f977c37bd710140fb0613fd27f84b2743c7d997b`。5.4 适配器为 `CRYPTO_LZ4K` 增加 `CRYPTO_ACOMP2` 依赖，并在 `drivers/block/zram/zcomp.c` 原有 `NULL` 哨兵前加入 LZ4K backend。
+
+构建只启用 `CONFIG_CRYPTO_LZ4K=y`，使压缩算法可选；不改现有 zram 默认算法、不强制运行时切换，也不加启动参数。构建脚本会比较集成前后的 `CONFIG_ZRAM*` 配置，并在发生变化时失败。
+
+运行主机侧测试：
+
+```sh
+python3 scripts/test_lz4k.py
+```
+
+测试覆盖 4 KiB 页的重复/随机数据编码解码、ASan/UBSan 下损坏输入检查，以及适配器的 Kconfig 和 backend 哨兵回归。完整 arm64 构建由 `.github/workflows/build.yaml` 手动触发，产物名含 `lz4k`；本地构建空间有限时以该流程为准。即使构建成功，也仍需在 MIX 4 上验证启动、zram 运行、SELinux/Termux 与待机/游戏表现。没有实机数据前，不宣称压缩率、性能或能效收益。
+
+此分支只包含 LZ4K。后续 Kcompressd 和 MGLRU 工作按既定顺序另行移植、单独测试，以便归因。
