@@ -27,7 +27,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-SchedutilFastDown-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -39,6 +39,7 @@ case "$IDLE_GOVERNOR" in
 esac
 sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors"
 bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profile test has shell syntax errors"
+python3 "$ROOT/scripts/test-odin-schedutil-default.py" || fail "schedutil default patch regression failed"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -128,6 +129,13 @@ git -C "$KSRC" remote add origin "$KERNEL_URL"
 git -C "$KSRC" fetch --depth=1 origin "$KERNEL_REF"
 git -C "$KSRC" checkout --detach -q FETCH_HEAD
 [[ "$(git -C "$KSRC" rev-parse HEAD)" == "$KERNEL_REF" ]] || fail "kernel checkout is not the pinned $KERNEL_REF"
+step "apply MIX 4 daily-power schedutil default to the pinned source"
+SCHEDUTIL_SOURCE="$KSRC/kernel/sched/cpufreq_schedutil.c"
+python3 "$ROOT/scripts/apply-odin-schedutil-default.py" "$SCHEDUTIL_SOURCE"
+grep -Fqx $'\t/* odin-daily-power: preserve ramp-up delay; allow immediate ramp-down */' "$SCHEDUTIL_SOURCE" || fail "daily-power source marker is missing"
+grep -Fqx $'\ttunables->up_rate_limit_us = cpufreq_policy_transition_delay_us(policy);' "$SCHEDUTIL_SOURCE" || fail "original ramp-up initialization was not preserved"
+grep -Fqx $'\ttunables->down_rate_limit_us = 0;' "$SCHEDUTIL_SOURCE" || fail "down-rate default was not set to zero"
+SCHEDUTIL_DEFAULT_PATCH_SHA256="$(sha256sum "$ROOT/scripts/apply-odin-schedutil-default.py" | awk '{print $1}')"
 SOURCE_DATE_EPOCH="$(git -C "$KSRC" show -s --format=%ct HEAD)"
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || fail "could not derive SOURCE_DATE_EPOCH from the pinned kernel commit"
 export SOURCE_DATE_EPOCH
@@ -358,6 +366,10 @@ Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: re
 Runtime profile: tools/odin-schedutil-fast-down.sh (manual only; sets per-policy schedutil down_rate_limit_us=0)
 Runtime profile rollback: exact per-policy values saved to /data/local/tmp/odin-schedutil-fast-down.state and restored on request
 Runtime profile SHA-256: $RUNTIME_PROFILE_SHA256
+Default schedutil policy: all policies initialize down_rate_limit_us=0; original per-policy up_rate_limit_us=cpufreq_policy_transition_delay_us(policy) is preserved
+Default schedutil policy scope: applied at governor initialization; Android userspace/Power HAL may override runtime tunables; no polling service is installed
+Default schedutil source: kernel/sched/cpufreq_schedutil.c at pinned kernel commit $KERNEL_REF, modified by scripts/apply-odin-schedutil-default.py
+Default schedutil patcher SHA-256: $SCHEDUTIL_DEFAULT_PATCH_SHA256
 EOF
 
 step "package and verify pinned AnyKernel3 for odin / Horizon Kernel Flasher"
