@@ -1,6 +1,12 @@
-# Xiaomi MIX 4（odin）5.4.302 日常响应与功耗调优
+# Xiaomi MIX 4（odin）5.4.302 SUSFS 2.4 / BakaSU / MGLRU
 
-本次调优位于独立分支 `tune/odin-daily-power`，从已验证的 `fix/susfs24-selinux-context-sid` 提交 `dc93390` 创建；不会改写 SID 修复分支或 SUSFS 2.3 仓库 `kaixin886/odin-kernel-susfs`。目标设备为 Xiaomi MIX 4 / Snapdragon 888 / Linux 5.4.302，重点是保留日常调频响应、缩短负载回落后的降频等待。当前没有 MIX 4 实测结果，不宣称省电或性能收益。
+本分支 `feature/odin-mglru` 基于 `tune/odin-daily-power` 提交 `5b26ce9`，只在独立 SUSFS 2.4 研发线上试验 MGLRU，不改写 SUSFS 2.3 仓库 `kaixin886/odin-kernel-susfs`。目标设备为 Xiaomi MIX 4 / Snapdragon 888 / Linux 5.4.302。已有 schedutil 日常回落调优保留；LZ4K 与 Kcompressd 仍是独立阶段分支，未合并进本 MGLRU 分支。源码和配置测试不代表已在 MIX 4 上验证启动、功耗或性能。
+
+## MGLRU 适配
+
+固定 odin 5.4.302 源码没有 MGLRU 实现，因此仅打开 Kconfig 不足以启用。适配参考了 [Ghostess 5.4.302 移植提交](https://github.com/Ghostess/ghost_kernel_a52s_5g/commit/39289dde38331d6b7feaceb1675fd3de3252f0f3)，并按 odin 代码重建 `mm/vmscan.c` 的 reclaim 分流：MGLRU 编译进内核，但原 reclaim 路径保留为回退，运行时只有开关打开才走 MGLRU。Samsung 专用配置和 x86 文件已排除；补丁不触及 thermal 驱动。
+
+安全试验配置为 `CONFIG_LRU_GEN=y`、`CONFIG_LRU_GEN_ENABLED=n`、`CONFIG_LRU_GEN_STATS=n`：启动后默认仍用旧 LRU，设备侧可通过 `/sys/kernel/mm/lru_gen/enabled` 做 A/B 开关。运行时接口见 [Linux MGLRU 文档](https://docs.kernel.org/admin-guide/mm/multigen_lru.html)；固定来源、原始补丁与适配补丁哈希见 [`port/mglru/source-pins.json`](port/mglru/source-pins.json)，研究记录见 [`port/mglru/RESEARCH.md`](port/mglru/RESEARCH.md)。此为移植参考，不是对 Snapdragon 888 或 MIX 4 收益的证明。
 
 ## 固定集成版本
 
@@ -29,18 +35,19 @@ SUSFS 2.4 的 SELinux context-to-SID 修复保持原样：过滤后的 context �
 
 ## 脚本与回归测试
 
-构建会先运行 `scripts/apply-odin-schedutil-default.py`：它只匹配固定内核源码中的唯一初始化块，保留原升频默认，并拒绝重复或有歧义的源文件。`scripts/test-odin-schedutil-default.py` 覆盖精准替换、未改动上下文、重复应用、缺失与重复匹配；`scripts/odin-schedutil-fast-down.sh` 仍提供设备侧 `status|apply|restore`，只作临时手动测试并精确恢复运行时原值。
+构建会验证 MGLRU 适配补丁哈希、固定源码 pin 与 reclaim 分流，并断言 thermal 相关配置不变。`scripts/test-odin-mglru.py` 检查补丁路径、源码钩子、默认关闭配置和 thermal protections。原 schedutil 回归测试仍覆盖精准替换、未改动上下文、重复应用、缺失与重复匹配；`scripts/odin-schedutil-fast-down.sh` 仍提供设备侧 `status|apply|restore`，只作临时手动测试并精确恢复运行时原值。
 
 ```sh
 python3 scripts/test-odin-schedutil-default.py
+python3 scripts/test-odin-mglru.py
 bash scripts/test-odin-schedutil-fast-down.sh
 JOBS=8 INSTALL_DEPS=0 bash scripts/build-kernel.sh
 ```
 
-完整构建会再运行 SUSFS/BakaSU SID 静态回归检查，校验配置、源码 pin、AnyKernel ZIP 清单、包内 Image 与独立 Image 的一致性，并记录来源与补丁哈希。包名包含 `Xiaomi-MIX4-odin`、内核/SUSFS/BakaSU 版本、`SELinuxSIDHashFix`、`SchedutilFastDown` 与 `UNTESTED`。
+完整构建会再运行 SUSFS/BakaSU SID 静态回归检查，校验配置、源码 pin、AnyKernel ZIP 清单、包内 Image 与独立 Image 的一致性，并记录来源与补丁哈希。包名包含 `Xiaomi-MIX4-odin`、内核/SUSFS/BakaSU 版本、`SELinuxSIDHashFix`、`SchedutilFastDown`、`MGLRU-DefaultOff` 与 `UNTESTED`。
 
 ## MIX 4 验收
 
 保持 ROM、亮度、刷新率、网络、室温和电量区间一致，先测旧内核，再测此分支，最后恢复旧内核（A/B/A）。记录息屏耗电与唤醒源、CPUFreq policy 实际 governor/rate-limit、cpuidle residency；日常记录触摸到首帧、滚动掉帧；游戏记录帧时间 P50/P95/P99、温度及 thermal 限频。若续航没有稳定改善或交互/游戏退化，恢复此前可启动的内核。构建或 ZIP 校验通过也不能替代冷启动、Termux、网络、相机/音频、休眠唤醒和热控实测。
 
-**当前状态：** 补丁、语法与模拟回归测试通过；本分支完整 `Image`/AnyKernel 包与 MIX 4 实机 A/B 尚未验证。当前工作区仅余约 2.6 GB，而固定 Clang 工具链目录约 3.5 GB；为避免空间耗尽，没有启动会下载并展开工具链的全量构建，也没有覆盖 `out/` 中此前调度实验分支的文件。那些旧文件不可当作本分支产物。
+**当前状态：** MGLRU 补丁已在固定 odin 源码和 SUSFS overlay 后通过 whitespace 严格应用检查；`odin_defconfig`/`olddefconfig` 验证 `CONFIG_LRU_GEN=y`、默认关闭 MGLRU，并确认 thermal protections 仍启用。源码与配置回归测试通过；完整 `Image`/AnyKernel 编译、GitHub 云构建及 MIX 4 启动和 A/B 功耗/性能测试仍未验证。

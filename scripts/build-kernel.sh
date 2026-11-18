@@ -10,6 +10,8 @@ OUT_MARKER="$OUT/.kernel-susfs-2.4-generated-output-v1"
 
 KERNEL_URL="https://github.com/Inkypen79/kernel_xiaomi_odin.git"
 KERNEL_REF="50e0141b29b62be21632c768e4818348098ac6cd"
+MGLRU_PATCH="$ROOT/port/mglru/odin-mglru.patch"
+MGLRU_PINS="$ROOT/port/mglru/source-pins.json"
 BAKASU_REF="55f3dcb11a0ce5b8aad3cb9763b200fe52efe218"
 BAKASU_MANAGER_FIX_REF="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
 BAKASU_MANAGER_FIX_PATH="manager/app/src/main/java/org/bakasu/bakasu/ui/webui/WebViewInterface.kt"
@@ -27,7 +29,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-SchedutilFastDown-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-SchedutilFastDown-MGLRU-DefaultOff-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -40,6 +42,7 @@ esac
 sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors"
 bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profile test has shell syntax errors"
 python3 "$ROOT/scripts/test-odin-schedutil-default.py" || fail "schedutil default patch regression failed"
+python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" || fail "MGLRU patch pin or compatibility metadata check failed"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -224,6 +227,13 @@ grep -q 'susfs_security_context_to_sid_force' "$KSRC/security/selinux/ss/service
 grep -q 'LSM_HOOK_INIT(inode_setxattr, handle_selinux_inode_setxattr)' "$KSRC/security/selinux/hooks.c" || fail "latest SUSFS inode_setxattr hook is not registered"
 grep -q 'LSM_HOOK_INIT(inode_post_setxattr, handle_selinux_inode_post_setxattr)' "$KSRC/security/selinux/hooks.c" || fail "latest SUSFS inode_post_setxattr hook is not registered"
 
+step "apply odin-specific MGLRU 5.4 backport (default disabled)"
+git -C "$KSRC" apply --check --whitespace=error --recount "$MGLRU_PATCH" || fail "MGLRU patch does not apply cleanly after SUSFS overlay"
+git -C "$KSRC" apply --whitespace=error --recount "$MGLRU_PATCH" || fail "could not apply pinned MGLRU patch"
+MGLRU_PATCH_SHA256="$(sha256sum "$MGLRU_PATCH" | awk '{print $1}')"
+python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" || \
+  fail "MGLRU source integration regression failed"
+
 step "add 5.4 BakaSU compatibility export"
 python3 - "$KSRC/fs/namespace.c" <<'PYEOF'
 import sys
@@ -285,12 +295,15 @@ CFG="$KOUT/.config"
   --enable EXT4_FS --enable HEADERS_INSTALL \
   --enable KSU_SUSFS --enable KSU_SUSFS_AVD \
   --enable KSU_SUSFS_PRIORITY_UID_FILTER \
+  --enable LRU_GEN --disable LRU_GEN_ENABLED --disable LRU_GEN_STATS \
   --enable CPU_FREQ_GOV_SCHEDUTIL \
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
   --enable CPU_FREQ_GOV_PERFORMANCE \
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
   --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
 make "${MAKE_ARGS[@]}" olddefconfig
+python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" --config "$CFG" || \
+  fail "MGLRU configuration or thermal protection regression failed"
 for config in \
   CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD \
   CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
@@ -328,6 +341,12 @@ grep -o '"[^"]*"' "$KOUT/include/generated/utsrelease.h" | head -1 | tr -d '"' >
 cat > "$OUT_STAGE/source-pins.txt" <<EOF
 Kernel URL: $KERNEL_URL
 Kernel commit: $KERNEL_REF
+MGLRU reference repository: https://github.com/Ghostess/ghost_kernel_a52s_5g
+MGLRU reference commit: 39289dde38331d6b7feaceb1675fd3de3252f0f3
+MGLRU original reference patch SHA-256: 9b709263f54d895947a297228df104eaf75d26a50d6915d8bc8831889d2d25da
+MGLRU odin adapter patch SHA-256: $MGLRU_PATCH_SHA256
+MGLRU configuration: CONFIG_LRU_GEN=y; CONFIG_LRU_GEN_ENABLED=n; CONFIG_LRU_GEN_STATS=n
+MGLRU runtime enable switch: /sys/kernel/mm/lru_gen/enabled
 SUSFS upstream URL: $SUSFS_UPSTREAM_URL
 SUSFS upstream branch: $SUSFS_UPSTREAM_BRANCH
 SUSFS upstream HEAD/reference: $SUSFS_UPSTREAM_REF
@@ -363,6 +382,7 @@ CPU idle governors: menu and TEO both built-in; requested default=$IDLE_GOVERNOR
 Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
 Command-line mode: bootloader arguments appended; forced override disabled
 Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
+MGLRU: compiled for device-side A/B but disabled by default; no MIX 4 runtime validation yet
 Runtime profile: tools/odin-schedutil-fast-down.sh (manual only; sets per-policy schedutil down_rate_limit_us=0)
 Runtime profile rollback: exact per-policy values saved to /data/local/tmp/odin-schedutil-fast-down.state and restored on request
 Runtime profile SHA-256: $RUNTIME_PROFILE_SHA256

@@ -1,4 +1,4 @@
-name: "Build kernel-susfs-2.4: odin SUSFS v2.4.0 + BakaSU"
+name: "Build kernel-susfs-2.4: odin SUSFS v2.4.0 + BakaSU + MGLRU (default off)"
 
 on:
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-susfs-2.4-odin-susfs-v2.4.0-bakasu
+          name: kernel-susfs-2.4-odin-susfs-v2.4.0-bakasu-mglru-default-off
           path: out/
           if-no-files-found: warn
           retention-days: 14

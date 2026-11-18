@@ -1,0 +1,27 @@
+{
+  "target": {
+    "device": "Xiaomi MIX 4",
+    "codename": "odin",
+    "kernel_version": "5.4.302",
+    "repository": "https://github.com/Inkypen79/kernel_xiaomi_odin.git",
+    "commit": "50e0141b29b62be21632c768e4818348098ac6cd"
+  },
+  "reference": {
+    "repository": "https://github.com/Ghostess/ghost_kernel_a52s_5g",
+    "commit": "39289dde38331d6b7feaceb1675fd3de3252f0f3",
+    "patch_url": "https://github.com/Ghostess/ghost_kernel_a52s_5g/commit/39289dde38331d6b7feaceb1675fd3de3252f0f3.patch",
+    "original_patch_sha256": "9b709263f54d895947a297228df104eaf75d26a50d6915d8bc8831889d2d25da"
+  },
+  "adapter_patch": {
+    "path": "port/mglru/odin-mglru.patch",
+    "sha256": "8d82d869090dd2f35c984e676398de9e054f5341449a32a68be4ca94dda74f99",
+    "files": 45,
+    "notes": "Rebased to odin 5.4.302; removes x86/Samsung-only configuration and replaces the vendor-specific vmscan hunk with the MGLRU implementation plus an opt-in branch in shrink_node_memcg."
+  },
+  "configuration": {
+    "CONFIG_LRU_GEN": "y",
+    "CONFIG_LRU_GEN_ENABLED": "n",
+    "CONFIG_LRU_GEN_STATS": "n",
+    "runtime_switch": "/sys/kernel/mm/lru_gen/enabled"
+  }
+}
