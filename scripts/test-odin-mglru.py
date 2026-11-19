@@ -76,7 +76,7 @@ def check_source(source: Path) -> None:
     dispatch = vmscan.find("if (lru_gen_enabled())", fn)
     fallback = vmscan.find("get_scan_count(lruvec, memcg, sc, nr, lru_pages);", fn)
     if dispatch < 0 or fallback < 0 or dispatch >= fallback:
-        fail("MGLRU opt-in dispatch is missing or replaces the original reclaim fallback")
+        fail("MGLRU runtime-switch dispatch is missing or replaces the original reclaim fallback")
     if "lru_gen_shrink_lruvec(lruvec, sc);" not in vmscan[dispatch:fallback]:
         fail("MGLRU reclaim dispatch does not call lru_gen_shrink_lruvec")
 
@@ -88,21 +88,21 @@ def check_source(source: Path) -> None:
     docs = (source / "Documentation/admin-guide/mm/multigen_lru.rst").read_text()
     if "/sys/kernel/mm/lru_gen/enabled" not in docs:
         fail("documented runtime enable switch is missing")
-    print("PASS: MGLRU hooks, opt-in reclaim dispatch, original fallback, Kconfig and runtime docs verified")
+    print("PASS: MGLRU hooks, runtime-switch dispatch, original fallback, Kconfig and kill-switch docs verified")
 
 
 def check_config(config_path: Path) -> None:
     config = config_path.read_text()
-    for option in ("CONFIG_LRU_GEN",):
+    for option in ("CONFIG_LRU_GEN", "CONFIG_LRU_GEN_ENABLED"):
         if not re.search(rf"(?m)^{option}=y$", config):
-            fail(f"{option} is not enabled")
-    for option in ("CONFIG_LRU_GEN_ENABLED", "CONFIG_LRU_GEN_STATS"):
+            fail(f"{option} must be enabled for the integrated default-on build")
+    for option in ("CONFIG_LRU_GEN_STATS",):
         if not re.search(rf"(?m)^# {option} is not set$", config):
-            fail(f"{option} must remain disabled for a default-off, low-overhead trial")
+            fail(f"{option} must remain disabled for the integrated build")
     for option in THERMAL_CONFIGS:
         if not re.search(rf"(?m)^{option}=y$", config):
             fail(f"existing thermal protection {option} is not enabled")
-    print("PASS: CONFIG_LRU_GEN=y; default enable/stats off; all thermal protection options remain y")
+    print("PASS: CONFIG_LRU_GEN=y and CONFIG_LRU_GEN_ENABLED=y; stats off; all thermal protection options remain y")
 
 
 def main() -> int:

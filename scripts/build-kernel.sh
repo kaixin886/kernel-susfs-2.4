@@ -13,6 +13,7 @@ KERNEL_REF="50e0141b29b62be21632c768e4818348098ac6cd"
 MGLRU_PATCH="$ROOT/port/mglru/odin-mglru.patch"
 MGLRU_PINS="$ROOT/port/mglru/source-pins.json"
 LZ4K_PATCH="$ROOT/port/lz4k/openEuler-pr-1277.patch"
+KCOMPRESSD_RFC_URL="https://lore.kernel.org/lkml/20250430082651.3152444-1-qun-wei.lin@mediatek.com/"
 BAKASU_REF="55f3dcb11a0ce5b8aad3cb9763b200fe52efe218"
 BAKASU_MANAGER_FIX_REF="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
 BAKASU_MANAGER_FIX_PATH="manager/app/src/main/java/org/bakasu/bakasu/ui/webui/WebViewInterface.kt"
@@ -30,7 +31,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-MGLRU-DefaultOff-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-MGLRU-EnabledDefault-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -45,6 +46,8 @@ bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profil
 python3 "$ROOT/scripts/test-odin-schedutil-default.py" || fail "schedutil default patch regression failed"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" || fail "MGLRU patch pin or compatibility metadata check failed"
 python3 "$ROOT/scripts/test_lz4k.py" || fail "LZ4K codec or 5.4 adapter regression failed"
+python3 -m py_compile "$ROOT/scripts/apply-kcompressd.py" "$ROOT/scripts/test-kcompressd-5.4.py" || fail "Kcompressd Python tooling has syntax errors"
+[[ -s "$ROOT/port/kcompressd/mm/kcompressd.c" ]] || fail "missing Kcompressd worker source"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -119,6 +122,9 @@ print("local port tree file set and checksums: PASS")
 PYEOF
 PORT_MANIFEST_SHA256="$(sha256sum "$PORT_MANIFEST" | awk '{print $1}')"
 LZ4K_PATCH_SHA256="$(sha256sum "$LZ4K_PATCH" | awk '{print $1}')"
+KCOMPRESSD_ADAPTER_SHA256="$(sha256sum "$ROOT/scripts/apply-kcompressd.py" | awk '{print $1}')"
+KCOMPRESSD_WORKER_SHA256="$(sha256sum "$ROOT/port/kcompressd/mm/kcompressd.c" | awk '{print $1}')"
+KCOMPRESSD_TEST_SHA256="$(sha256sum "$ROOT/scripts/test-kcompressd-5.4.py" | awk '{print $1}')"
 
 if [[ "${INSTALL_DEPS:-1}" == 1 ]]; then
   step "install host build dependencies"
@@ -232,12 +238,20 @@ grep -q 'susfs_security_context_to_sid_force' "$KSRC/security/selinux/ss/service
 grep -q 'LSM_HOOK_INIT(inode_setxattr, handle_selinux_inode_setxattr)' "$KSRC/security/selinux/hooks.c" || fail "latest SUSFS inode_setxattr hook is not registered"
 grep -q 'LSM_HOOK_INIT(inode_post_setxattr, handle_selinux_inode_post_setxattr)' "$KSRC/security/selinux/hooks.c" || fail "latest SUSFS inode_post_setxattr hook is not registered"
 
-step "apply odin-specific MGLRU 5.4 backport (default disabled)"
+step "apply odin-specific MGLRU 5.4 backport (enabled by default; runtime kill switch retained)"
 git -C "$KSRC" apply --check --whitespace=error --recount "$MGLRU_PATCH" || fail "MGLRU patch does not apply cleanly after SUSFS overlay"
 git -C "$KSRC" apply --whitespace=error --recount "$MGLRU_PATCH" || fail "could not apply pinned MGLRU patch"
 MGLRU_PATCH_SHA256="$(sha256sum "$MGLRU_PATCH" | awk '{print $1}')"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" || \
   fail "MGLRU source integration regression failed"
+
+step "apply pinned odin Linux 5.4.302 Kcompressd backport and run static regressions"
+python3 "$ROOT/scripts/apply-kcompressd.py" "$KSRC" "$ROOT/port/kcompressd/mm/kcompressd.c" || \
+  fail "Kcompressd 5.4 source adapter refused or failed"
+python3 "$ROOT/scripts/test-kcompressd-5.4.py" "$KSRC" || \
+  fail "Kcompressd 5.4 static regression checks failed"
+python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" || \
+  fail "MGLRU checks failed after Kcompressd integration"
 
 step "add 5.4 BakaSU compatibility export"
 python3 - "$KSRC/fs/namespace.c" <<'PYEOF'
@@ -302,7 +316,8 @@ ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || tr
   --enable KSU_SUSFS --enable KSU_SUSFS_AVD \
   --enable KSU_SUSFS_PRIORITY_UID_FILTER \
   --enable CRYPTO_LZ4K \
-  --enable LRU_GEN --disable LRU_GEN_ENABLED --disable LRU_GEN_STATS \
+  --enable LRU_GEN --enable LRU_GEN_ENABLED --disable LRU_GEN_STATS \
+  --enable KCOMPRESSD \
   --enable CPU_FREQ_GOV_SCHEDUTIL \
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
   --enable CPU_FREQ_GOV_PERFORMANCE \
@@ -314,6 +329,9 @@ ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || tru
   fail "LZ4K integration changed existing zram configuration/default"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" --config "$CFG" || \
   fail "MGLRU configuration or thermal protection regression failed"
+python3 "$ROOT/scripts/test-kcompressd-5.4.py" "$KSRC" || \
+  fail "Kcompressd default/runtime regression failed after configuration"
+grep -q '^CONFIG_KCOMPRESSD=y$' "$CFG" || fail "CONFIG_KCOMPRESSD was dropped by olddefconfig"
 for config in \
   CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD \
   CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CRYPTO_LZ4K \
@@ -356,12 +374,17 @@ LZ4K source: openEuler kernel PR #1277; original two-commit patch
 LZ4K upstream patch SHA-256: $LZ4K_PATCH_SHA256
 LZ4K Linux 5.4 adaptations: select CRYPTO_ACOMP2; zcomp backend inserted before NULL sentinel
 LZ4K build config: CONFIG_CRYPTO_LZ4K=y; runtime selectable, existing zram default and boot command line unchanged
+Kcompressd upstream reference: $KCOMPRESSD_RFC_URL (MediaTek RFC v1; odin Linux 5.4.302 page-based adaptation)
+Kcompressd adapter SHA-256: $KCOMPRESSD_ADAPTER_SHA256
+Kcompressd worker source SHA-256: $KCOMPRESSD_WORKER_SHA256
+Kcompressd static regression test SHA-256: $KCOMPRESSD_TEST_SHA256
+Kcompressd config/runtime: CONFIG_KCOMPRESSD=y; vm.kcompressd is exposed with range 0..128 and defaults to 0 (disabled)
 MGLRU reference repository: https://github.com/Ghostess/ghost_kernel_a52s_5g
 MGLRU reference commit: 39289dde38331d6b7feaceb1675fd3de3252f0f3
 MGLRU original reference patch SHA-256: 9b709263f54d895947a297228df104eaf75d26a50d6915d8bc8831889d2d25da
 MGLRU odin adapter patch SHA-256: $MGLRU_PATCH_SHA256
-MGLRU configuration: CONFIG_LRU_GEN=y; CONFIG_LRU_GEN_ENABLED=n; CONFIG_LRU_GEN_STATS=n
-MGLRU runtime enable switch: /sys/kernel/mm/lru_gen/enabled
+MGLRU configuration: CONFIG_LRU_GEN=y; CONFIG_LRU_GEN_ENABLED=y; CONFIG_LRU_GEN_STATS=n
+MGLRU runtime kill switch: /sys/kernel/mm/lru_gen/enabled (write 0 to disable; write y to enable)
 SUSFS upstream URL: $SUSFS_UPSTREAM_URL
 SUSFS upstream branch: $SUSFS_UPSTREAM_BRANCH
 SUSFS upstream HEAD/reference: $SUSFS_UPSTREAM_REF
@@ -397,7 +420,8 @@ CPU idle governors: menu and TEO both built-in; requested default=$IDLE_GOVERNOR
 Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
 Command-line mode: bootloader arguments appended; forced override disabled
 Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
-MGLRU: compiled for device-side A/B but disabled by default; no MIX 4 runtime validation yet
+MGLRU: enabled by default at boot; runtime kill switch retained; no MIX 4 runtime validation yet
+Kcompressd: compiled, but vm.kcompressd defaults to 0; not runtime-tested on MIX 4
 Runtime profile: tools/odin-schedutil-fast-down.sh (manual only; sets per-policy schedutil down_rate_limit_us=0)
 Runtime profile rollback: exact per-policy values saved to /data/local/tmp/odin-schedutil-fast-down.state and restored on request
 Runtime profile SHA-256: $RUNTIME_PROFILE_SHA256
