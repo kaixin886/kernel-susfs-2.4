@@ -12,6 +12,7 @@ KERNEL_URL="https://github.com/Inkypen79/kernel_xiaomi_odin.git"
 KERNEL_REF="50e0141b29b62be21632c768e4818348098ac6cd"
 MGLRU_PATCH="$ROOT/port/mglru/odin-mglru.patch"
 MGLRU_PINS="$ROOT/port/mglru/source-pins.json"
+LZ4K_PATCH="$ROOT/port/lz4k/openEuler-pr-1277.patch"
 BAKASU_REF="55f3dcb11a0ce5b8aad3cb9763b200fe52efe218"
 BAKASU_MANAGER_FIX_REF="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
 BAKASU_MANAGER_FIX_PATH="manager/app/src/main/java/org/bakasu/bakasu/ui/webui/WebViewInterface.kt"
@@ -29,7 +30,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SELinuxSIDHashFix-SchedutilFastDown-MGLRU-DefaultOff-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-MGLRU-DefaultOff-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -43,6 +44,7 @@ sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has s
 bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profile test has shell syntax errors"
 python3 "$ROOT/scripts/test-odin-schedutil-default.py" || fail "schedutil default patch regression failed"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" || fail "MGLRU patch pin or compatibility metadata check failed"
+python3 "$ROOT/scripts/test_lz4k.py" || fail "LZ4K codec or 5.4 adapter regression failed"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
 [[ ! -L "$OUT" ]] || fail "out/ must not be a symbolic link"
@@ -116,6 +118,7 @@ subprocess.run(["sha256sum", "-c", "port/SHA256SUMS"], cwd=root, check=True)
 print("local port tree file set and checksums: PASS")
 PYEOF
 PORT_MANIFEST_SHA256="$(sha256sum "$PORT_MANIFEST" | awk '{print $1}')"
+LZ4K_PATCH_SHA256="$(sha256sum "$LZ4K_PATCH" | awk '{print $1}')"
 
 if [[ "${INSTALL_DEPS:-1}" == 1 ]]; then
   step "install host build dependencies"
@@ -139,6 +142,8 @@ grep -Fqx $'\t/* odin-daily-power: preserve ramp-up delay; allow immediate ramp-
 grep -Fqx $'\ttunables->up_rate_limit_us = cpufreq_policy_transition_delay_us(policy);' "$SCHEDUTIL_SOURCE" || fail "original ramp-up initialization was not preserved"
 grep -Fqx $'\ttunables->down_rate_limit_us = 0;' "$SCHEDUTIL_SOURCE" || fail "down-rate default was not set to zero"
 SCHEDUTIL_DEFAULT_PATCH_SHA256="$(sha256sum "$ROOT/scripts/apply-odin-schedutil-default.py" | awk '{print $1}')"
+step "apply optional LZ4K zram compressor with 5.4 compatibility adapters"
+python3 "$ROOT/scripts/apply_lz4k_patch.py" "$KSRC" || fail "LZ4K source integration failed"
 SOURCE_DATE_EPOCH="$(git -C "$KSRC" show -s --format=%ct HEAD)"
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || fail "could not derive SOURCE_DATE_EPOCH from the pinned kernel commit"
 export SOURCE_DATE_EPOCH
@@ -287,6 +292,7 @@ python3 "$ROOT/scripts/test-susfs-selinux-context-hash.py" "$KSRC" || \
 step "configure odin_defconfig"
 make "${MAKE_ARGS[@]}" odin_defconfig
 CFG="$KOUT/.config"
+ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
 # Use scheduler-driven CPU frequency scaling and a testable TEO idle policy.
 # Keep performance/menu compiled, preserve Qualcomm LPM, and let the bootloader
 # append its arguments rather than forcing a replacement kernel command line.
@@ -295,6 +301,7 @@ CFG="$KOUT/.config"
   --enable EXT4_FS --enable HEADERS_INSTALL \
   --enable KSU_SUSFS --enable KSU_SUSFS_AVD \
   --enable KSU_SUSFS_PRIORITY_UID_FILTER \
+  --enable CRYPTO_LZ4K \
   --enable LRU_GEN --disable LRU_GEN_ENABLED --disable LRU_GEN_STATS \
   --enable CPU_FREQ_GOV_SCHEDUTIL \
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
@@ -302,11 +309,15 @@ CFG="$KOUT/.config"
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
   --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
 make "${MAKE_ARGS[@]}" olddefconfig
+ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
+[[ "$ZRAM_KCONFIG_BEFORE" == "$ZRAM_KCONFIG_AFTER" ]] || \
+  fail "LZ4K integration changed existing zram configuration/default"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" --config "$CFG" || \
   fail "MGLRU configuration or thermal protection regression failed"
 for config in \
   CONFIG_KSU CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_AVD \
-  CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
+  CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER CONFIG_CRYPTO_LZ4K \
+  CONFIG_LZ4K_COMPRESS CONFIG_LZ4K_DECOMPRESS CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
   CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL CONFIG_CPU_FREQ_GOV_PERFORMANCE \
   CONFIG_CPU_IDLE_GOV_MENU CONFIG_CPU_IDLE_GOV_TEO CONFIG_ARM_QCOM_LPM_CPUIDLE \
   CONFIG_NO_HZ_IDLE CONFIG_RCU_FAST_NO_HZ CONFIG_RCU_NOCB_CPU \
@@ -341,6 +352,10 @@ grep -o '"[^"]*"' "$KOUT/include/generated/utsrelease.h" | head -1 | tr -d '"' >
 cat > "$OUT_STAGE/source-pins.txt" <<EOF
 Kernel URL: $KERNEL_URL
 Kernel commit: $KERNEL_REF
+LZ4K source: openEuler kernel PR #1277; original two-commit patch
+LZ4K upstream patch SHA-256: $LZ4K_PATCH_SHA256
+LZ4K Linux 5.4 adaptations: select CRYPTO_ACOMP2; zcomp backend inserted before NULL sentinel
+LZ4K build config: CONFIG_CRYPTO_LZ4K=y; runtime selectable, existing zram default and boot command line unchanged
 MGLRU reference repository: https://github.com/Ghostess/ghost_kernel_a52s_5g
 MGLRU reference commit: 39289dde38331d6b7feaceb1675fd3de3252f0f3
 MGLRU original reference patch SHA-256: 9b709263f54d895947a297228df104eaf75d26a50d6915d8bc8831889d2d25da

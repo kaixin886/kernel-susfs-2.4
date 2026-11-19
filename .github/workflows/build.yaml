@@ -1,32 +1,26 @@
-name: "Build kernel-susfs-2.4: odin SUSFS v2.4.0 + BakaSU + MGLRU (default off)"
-
+name: "Build Xiaomi MIX 4 odin: SUSFS 2.4 + BakaSU + daily-power + LZ4K + MGLRU default-off"
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
-      - name: Check out port repository
+      - name: Check out integration branch
         uses: actions/checkout@v4
-
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h
-
-      - name: Build pinned kernel
+      - name: Build and verify pinned arm64 kernel package
         run: bash scripts/build-kernel.sh
-
       - name: Upload kernel artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-susfs-2.4-odin-susfs-v2.4.0-bakasu-mglru-default-off
+          name: Xiaomi-MIX4-odin-susfs24-bakasu-dailypower-lz4k-mglru-default-off-UNTESTED
           path: out/
           if-no-files-found: warn
           retention-days: 14
