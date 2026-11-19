@@ -31,7 +31,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-MGLRU-EnabledDefault-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-DefaultOn-Q32-MGLRU-EnabledDefault-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -378,7 +378,7 @@ Kcompressd upstream reference: $KCOMPRESSD_RFC_URL (MediaTek RFC v1; odin Linux 
 Kcompressd adapter SHA-256: $KCOMPRESSD_ADAPTER_SHA256
 Kcompressd worker source SHA-256: $KCOMPRESSD_WORKER_SHA256
 Kcompressd static regression test SHA-256: $KCOMPRESSD_TEST_SHA256
-Kcompressd config/runtime: CONFIG_KCOMPRESSD=y; vm.kcompressd is exposed with range 0..128 and defaults to 0 (disabled)
+Kcompressd config/runtime: CONFIG_KCOMPRESSD=y; vm.kcompressd defaults to 32 queued pages per node (range 0..128); writing 0 disables new asynchronous submissions
 MGLRU reference repository: https://github.com/Ghostess/ghost_kernel_a52s_5g
 MGLRU reference commit: 39289dde38331d6b7feaceb1675fd3de3252f0f3
 MGLRU original reference patch SHA-256: 9b709263f54d895947a297228df104eaf75d26a50d6915d8bc8831889d2d25da
@@ -421,7 +421,7 @@ Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
 Command-line mode: bootloader arguments appended; forced override disabled
 Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
 MGLRU: enabled by default at boot; runtime kill switch retained; no MIX 4 runtime validation yet
-Kcompressd: compiled, but vm.kcompressd defaults to 0; not runtime-tested on MIX 4
+Kcompressd: vm.kcompressd defaults to 32 queued pages per node; writing 0 disables new submissions; not runtime-tested on MIX 4
 Runtime profile: tools/odin-schedutil-fast-down.sh (manual only; sets per-policy schedutil down_rate_limit_us=0)
 Runtime profile rollback: exact per-policy values saved to /data/local/tmp/odin-schedutil-fast-down.state and restored on request
 Runtime profile SHA-256: $RUNTIME_PROFILE_SHA256

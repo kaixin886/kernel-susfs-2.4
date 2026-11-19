@@ -18,9 +18,11 @@ config KCOMPRESSD
 \thelp
 \t  Offload anonymous swap compression and synchronous swap writeback from
 \t  kswapd to one bounded worker per memory node. The runtime queue depth is
-\t  controlled by vm.kcompressd; zero disables new asynchronous submissions.
-\t  This is an experimental opt-in feature and should be validated on the
-\t  target device before daily use.
+\t  controlled by vm.kcompressd, measured as queued pages per node. The
+\t  integrated default is 32 pages per node; writing zero disables new
+\t  asynchronous submissions. The sysctl range is 0..128, matching the fixed
+\t  per-node queue capacity. This remains experimental and needs target-device
+\t  validation before daily use.
 
 '''
 

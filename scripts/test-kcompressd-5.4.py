@@ -59,8 +59,9 @@ def main() -> None:
     swapfile = read(root, "mm/swapfile.c")
     worker = read(root, "mm/kcompressd.c")
 
-    need("int sysctl_kcompressd;" in worker and "int sysctl_kcompressd = 64;" not in worker,
-         "runtime activation must default to disabled")
+    need("#define KCOMPRESSD_DEFAULT_DEPTH 32" in worker and
+         "int sysctl_kcompressd = KCOMPRESSD_DEFAULT_DEPTH;" in worker,
+         "integrated runtime default must be a nonzero 32-page queue depth")
     need(kconfig.count("config KCOMPRESSD\n") == 1,
          "KCOMPRESSD Kconfig entry missing or duplicated")
     kconfig_entry = between(kconfig, "config KCOMPRESSD\n", "config ZPOOL\n", "Kconfig entry")
@@ -177,6 +178,7 @@ def main() -> None:
          "pinned putback_lru_page must not be treated as an extra page unlock")
 
     print("Kcompressd odin Linux 5.4.302 static regression checks: PASS")
+    print("Default: 32 queued pages per node; vm.kcompressd=0 disables new submissions.")
     print("Covered: pinned baseline, optional config, bounded per-node queue, lock/writeback handoff, "
           "frontswap ordering, async BIO refs and in-flight drain, swapoff wait, and hotplug order.")
     print("Not covered: kernel compilation, zswap recursion/PF_MEMALLOC runtime behavior, "

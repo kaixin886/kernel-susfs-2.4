@@ -15,8 +15,9 @@
 #include <linux/sched.h>
 #include <linux/swap.h>
 
-/* Keep the experimental path opt-in until MIX 4 runtime testing is done. */
-int sysctl_kcompressd;
+/* Conservative default: 32 queued pages per node; vm.kcompressd=0 disables it. */
+#define KCOMPRESSD_DEFAULT_DEPTH 32
+int sysctl_kcompressd = KCOMPRESSD_DEFAULT_DEPTH;
 
 static struct page *kcompressd_dequeue(pg_data_t *pgdat)
 {

@@ -12,14 +12,16 @@
 
 本次集成分支将 `CONFIG_LRU_GEN=y` 与 `CONFIG_LRU_GEN_ENABLED=y` 设为启动默认启用，保留 `/sys/kernel/mm/lru_gen/enabled` runtime kill switch，并将 `CONFIG_LRU_GEN_STATS` 保持关闭。此为新集成分支的显式配置选择；独立 `feature/odin-mglru` 分支的默认关闭设置及既有包不变更。MGLRU 默认启用尚未在 MIX 4 实机做启动、稳定性、功耗或性能测试。
 
+集成分支也将 Kcompressd 的运行时队列深度初值设为 `vm.kcompressd=32`，即每个内存节点最多 32 个排队页；sysctl 仍接受 0–128，写入 `0` 会停止新的异步提交，固定队列容量为每节点 128。该值是保守的非零默认选择，尚未在 MIX 4 实机验证。
+
 适配补丁 SHA-256：`8d82d869090dd2f35c984e676398de9e054f5341449a32a68be4ca94dda74f99`。目标源码、参考提交和原始补丁哈希均固定在 [`source-pins.json`](source-pins.json)。
 
 ## 已完成的源码级检查
 
 - 对固定 odin 源码文件预检树执行 `git apply --check --whitespace=error --recount`，完整补丁通过；对已经叠加 SUSFS overlay 的完整 5.4.302 源码树再次执行同样检查，也通过。这确认 MGLRU 的 `fs/exec.c` 钩子不会被既有 overlay 覆盖。
 - 集成构建会检查 `CONFIG_LRU_GEN=y`、`CONFIG_LRU_GEN_ENABLED=y`、`CONFIG_LRU_GEN_STATS=n`，以及 thermal、CPU thermal、QTI thermal/DCVS、cooling/BCL 配置仍全部为 `y`。
-- `scripts/test-odin-mglru.py` 校验补丁哈希、目标 pin、设备适用路径、exec 钩子、MGLRU reclaim 分流、保留的旧 reclaim 调用、运行时关闭接口和 thermal 配置。集成 Kcompressd 后的 MGLRU + Kcompressd 源码交叉静态测试通过；它不是内核编译或设备运行验证。
+- `scripts/test-odin-mglru.py` 校验补丁哈希、目标 pin、设备适用路径、exec 钩子、MGLRU reclaim 分流、保留的旧 reclaim 调用、运行时关闭接口和 thermal 配置。`scripts/test-kcompressd-5.4.py` 会断言运行时默认值是每节点 32 页，同时检查 0 值关闭能力和队列边界。集成源码交叉静态测试不是内核编译或设备运行验证。
 
 ## 仍待验证
 
-没有在 MIX 4 实机验证默认开启时的启动稳定性、内存压力、息屏耗电、游戏帧时间、温控 A/B 或运行时 kill switch。完整 arm64 编译和 ZIP/Image 一致性检查将在集成分支 GitHub Actions 中完成；这仍不替代实机测试。包保留 `UNTESTED` 标记，不宣称省电、性能或热控收益。
+没有在 MIX 4 实机验证默认开启 MGLRU 和默认队列深度 32 的启动稳定性、内存压力、息屏耗电、游戏帧时间、温控 A/B 或运行时 kill switch。完整 arm64 编译和 ZIP/Image 一致性检查将在更新后的集成分支 GitHub Actions 中完成；这仍不替代实机测试。包保留 `UNTESTED` 标记，不宣称省电、性能或热控收益。
