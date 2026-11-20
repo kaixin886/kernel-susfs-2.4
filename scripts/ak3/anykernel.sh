@@ -3,7 +3,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=Xiaomi MIX 4 (odin) | Linux 5.4.302 | SUSFS 2.4.0 | BakaSU sync-up 55f3dcb | SELinux SID hash fix | Inkypen LineageOS 24.0 GApps / Android 17 target | UNTESTED
+kernel.string=Xiaomi MIX 4 (odin) | Linux 5.4.302 | SUSFS 2.4.0 | BakaSU sync-up 55f3dcb | LZ4K default | VM 99083/100 | RCU nocb all | DEBUG_FS stats | SELinux SID hash fix | Inkypen LineageOS 24.0 GApps / Android 17 target | UNTESTED
 do.devicecheck=1
 do.modules=0
 do.systemless=0

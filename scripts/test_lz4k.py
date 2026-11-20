@@ -183,7 +183,7 @@ def test_adapters() -> None:
     build_script = (ROOT / "scripts" / "build-kernel.sh").read_text()
     assert build_script.count("--enable CRYPTO_LZ4K") == 1
     assert "ZRAM_KCONFIG_BEFORE" in build_script and "ZRAM_KCONFIG_AFTER" in build_script
-    assert "LZ4K integration changed existing zram configuration/default" in build_script
+    assert "LZ4K integration changed existing zram Kconfig" in build_script
     assert "CONFIG_ZRAM_DEF_COMP" not in build_script
     print("Linux 5.4 Kconfig/zcomp adapter tests: PASS")
 

@@ -1,6 +1,6 @@
-# Xiaomi MIX 4（odin）5.4.302 集成内核：LZ4K + Kcompressd + MGLRU
+# Xiaomi MIX 4（odin）5.4.302 集成内核：LZ4K + VM + 唤醒统计 + RCU nocb + Kcompressd + MGLRU
 
-**状态：UNTESTED。** 这是面向 Xiaomi MIX 4 / Snapdragon 888 的集成构建候选。没有 MIX 4 实机启动验证，也没有 A/B/A 功耗、性能、游戏帧时间或温度测量；CI 成功和 ZIP 校验都不等于设备验证。
+**状态：UNTESTED。** 这是面向 Xiaomi MIX 4 / Snapdragon 888 的集成构建候选。新增的 debugfs 与 RCU 参数尚无本版实机启动验证，也没有针对本版的 A/B/A 功耗、性能、游戏帧时间或温度测量；CI 成功和 ZIP 校验都不等于设备验证。
 
 ## 来源与合并内容
 
@@ -8,13 +8,19 @@
 
 固定源码为 Inkypen `kernel_xiaomi_odin` 提交 `50e0141b29b62be21632c768e4818348098ac6cd`（Linux 5.4.302）。SUSFS v2.4.0 文件移植及 SHA-256 清单在 `port/`；BakaSU 固定 `sync-up` 提交 `55f3dcb11a0ce5b8aad3cb9763b200fe52efe218`，并单独叠加兼容的 Manager WebView #35262 修复 `7b65bde0710b5e7c6f755545cb15a4abd417f3a8`。ROM 标签按设备所有者提供的 LineageOS 24.0 GApps / Android 17 记录。
 
-## 三项功能及默认状态
+## 主要功能及默认状态
 
-- **LZ4K zram：可选，但不是默认压缩器。** 固定 openEuler kernel PR #1277 codec，并为 Linux 5.4 适配 `CRYPTO_ACOMP2` 与 zcomp backend。构建启用 `CONFIG_CRYPTO_LZ4K=y`，但会比较集成前后的 `CONFIG_ZRAM*` 配置并要求完全一致；不改默认算法、不加运行时切换或启动参数。
+- **LZ4K zram：默认压缩器。** 固定 openEuler kernel PR #1277 codec，并为 Linux 5.4 适配 `CRYPTO_ACOMP2` 与 zcomp backend；源码默认算法改为 `lz4k`，仍可在初始化前通过 zram `comp_algorithm` 切回其他已编译算法。该改动不改变 zram Kconfig，也不强制替换启动命令行。
+- **ZRAM 容量：16 GiB 尚未由此内核包设置。** 当前设备运行态的 16 GiB 与 LZ4K 来自用户确认的 Scene 开机脚本；用户计划在改好后关闭 Scene。Android 17 的主要 init 配置从 `/system/etc/init/hw/init.rc` 和分区 `*/etc/init/` 加载，上传的 `vendor_boot.img` 不含 zram 初始化配置，MMD 属性当前也为空。仅增加内核默认压缩器不能替代容量设置；驱动层预分配可能与 ROM/MMD 重复配置冲突。需另行把 `mmd.zram.enabled=true`、size=`17179869184`、algorithm=`lz4k` 接入目标 ROM 的 init/build 配置后，才能宣称关闭 Scene 后仍有 16 GiB。此项 ROM 集成尚未完成。
+- **VM 默认值：** `vm.swappiness=60`（固定 5.4 基线已是该值），`vm.extra_free_kbytes=99083` KB，`vm.watermark_scale_factor=100`。Scene/Power HAL 可在运行时覆盖；内核不轮询或反复写这些参数，避免与用户态管理器竞争。
 - **Kcompressd：运行时默认启用。** 编译启用 `CONFIG_KCOMPRESSD=y`，`vm.kcompressd` 初始值为 **32**，表示每个内存节点最多排队 32 个待处理页；范围为 0–128，写入 `0` 可停止新任务提交，写入非零值可重新启用/调整。每节点队列有独立上限 128。默认队列深度是为此 5.4 适配选择的保守非零值，不是实机性能结论；静态测试覆盖队列、页锁/写回屏障、异步 BIO、swapoff 与启停顺序。尚未做压力或 zswap runtime 测试。
 - **MGLRU：启动时默认启用，可在运行时关闭。** `CONFIG_LRU_GEN=y`、`CONFIG_LRU_GEN_ENABLED=y`，`CONFIG_LRU_GEN_STATS=n`。运行时 kill switch 为 `/sys/kernel/mm/lru_gen/enabled`；写入 `0` 可关闭，写入 `y` 可重新启用。默认开启仅适用于此集成分支，与独立 MGLRU 分支原先默认关闭的配置不同；独立分支不变更。适配参考与 pin 记录见 `port/mglru/`。
 - **继承的日常调速：** schedutil 保留原升频延迟，初始化降频延迟为 0。Android/Scene/Power HAL 仍可能改写运行时 tunables；没有安装轮询或自动切换服务。
+- **唤醒源与挂起统计：** 启用 `CONFIG_DEBUG_FS=y`；挂载 debugfs 后可读 `/sys/kernel/debug/wakeup_sources` 和 `/sys/kernel/debug/suspend_stats`。只提供统计，不内置 wakelock blocker 或通用黑名单。
+- **RCU 回调 offload：** 保留 `CONFIG_RCU_NOCB_CPU=y`，启动参数加入 `rcu_nocbs=all`，把回调处理放入 RCU nocb kthreads；不启用会周期唤醒的 `rcu_nocb_poll`。这是配置项，不代表已经测得省电收益。
+- **既有低风险配置：** `CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y` 已在基线中启用；menu 与 TEO idle governors 均编入，构建默认使用 TEO。当前没有做本机 governor A/B 对照。
 - **SUSFS SID 修复：** SUSFS 过滤后的 context 继续经 Linux 5.4 `context_struct_to_sid()` 做 hash-aware 转换；未修改 enforcing、SELinux policy 或 BakaSU hide 行为。
+- **MGLRU min_ttl_ms：** 默认保持 `0`。重度多开用户可自行评估 `/sys/kernel/mm/lru_gen/min_ttl_ms=1000`；该建议不是本构建的强制值，也未做本机 A/B 验证。
 
 SUSFS 2.3 仍单独保存在 `kaixin886/odin-kernel-susfs`，不在此次修改范围内。
 
@@ -22,4 +28,4 @@ SUSFS 2.3 仍单独保存在 `kaixin886/odin-kernel-susfs`，不在此次修改�
 
 构建脚本会断言 `CONFIG_THERMAL`、CPU thermal、QTI thermal/DCVS、CPU isolate/hotplug/voltage cooling 和 BCL 保护仍启用；MGLRU 回归测试拒绝补丁触及 device thermal driver。没有移植其他机型的 OPP、电压、GPU、IRQ 或温控数值。静态配置断言不能证明实机 thermal throttling 或温度行为。
 
-构建脚本组合运行 schedutil、LZ4K、Kcompressd、MGLRU 与 SUSFS/SID 回归；还检查 zram 默认配置、MGLRU 启动默认启用及运行时 kill switch、Kcompressd 默认 32 页/节点及零值关闭、热控选项、固定源码和补丁哈希。CI 完整编译 arm64 `Image` 并生成 AnyKernel3 ZIP；校验包内 `Image` 与单独构建的 `Image` 逐字节一致，并检查 ZIP 文件清单/哈希。完整实机测试仍须验证冷启动、重启、Termux、网络、相机/音频、休眠唤醒、zram 算法选择、swapoff/内存压力、Kcompressd 与 MGLRU 的开关及压力行为、温控限频和游戏帧时间，并做可回滚的 A/B/A。未完成前不宣称省电或性能收益，包名保留 `UNTESTED`。
+构建脚本组合运行 schedutil、LZ4K、VM 默认值、Kcompressd、MGLRU 与 SUSFS/SID 回归；还检查 `CONFIG_DEBUG_FS`、RCU nocb 启动参数、zram Kconfig 未被改变、目标压缩算法和 VM 默认值、MGLRU 启动默认启用及运行时 kill switch、Kcompressd 默认 32 页/节点及零值关闭、热控选项、固定源码和补丁哈希。CI 完整编译 arm64 `Image` 并生成 AnyKernel3 ZIP；校验包内 `Image` 与单独构建的 `Image` 逐字节一致，并检查 ZIP 文件清单/哈希。完整实机测试仍须验证冷启动、重启、Termux、网络、相机/音频、休眠唤醒、zram 算法和 16 GiB 容量的 ROM init 协作、swapoff/内存压力、debugfs 统计挂载与读数、RCU callback 行为、Kcompressd 与 MGLRU 的开关及压力行为、温控限频和游戏帧时间，并做可回滚的 A/B/A。熄屏限频尚未实现：需先用 odin 各 CPUFreq policy 的实测 OPP/频点确定安全上限，再实现默认关闭的 freq_qos 开关，并核实 Scene/boost/thermal 交互。未完成实机 A/B/A 前不宣称省电或性能收益，包名保留 `UNTESTED`。

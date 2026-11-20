@@ -1,4 +1,4 @@
-name: "Build Xiaomi MIX 4 odin: SUSFS 2.4 + BakaSU + daily-power + LZ4K + Kcompressd default-on Q32 + MGLRU default-on"
+name: "Build Xiaomi MIX 4 odin: SUSFS 2.4 + BakaSU + LZ4K + VM + RCU nocb + DEBUG_FS + Kcompressd + MGLRU"
 on:
   workflow_dispatch:
 permissions:
@@ -20,7 +20,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Xiaomi-MIX4-odin-susfs24-bakasu-dailypower-lz4k-kcompressd-default-on-Q32-mglru-default-on-UNTESTED
+          name: Xiaomi-MIX4-odin-susfs24-bakasu-lz4k-default-vm-99083-100-rcu-nocbs-debugfs-kcompressd-Q32-mglru-default-on-UNTESTED
           path: out/
           if-no-files-found: warn
           retention-days: 14

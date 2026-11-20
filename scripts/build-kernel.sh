@@ -31,7 +31,7 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-DefaultOn-Q32-MGLRU-EnabledDefault-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-VM-99083-100-RCU-NOCBS-DEBUGFS-Kcompressd-Q32-MGLRU-DefaultOn-UNTESTED.zip"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
@@ -46,7 +46,10 @@ bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profil
 python3 "$ROOT/scripts/test-odin-schedutil-default.py" || fail "schedutil default patch regression failed"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" || fail "MGLRU patch pin or compatibility metadata check failed"
 python3 "$ROOT/scripts/test_lz4k.py" || fail "LZ4K codec or 5.4 adapter regression failed"
-python3 -m py_compile "$ROOT/scripts/apply-kcompressd.py" "$ROOT/scripts/test-kcompressd-5.4.py" || fail "Kcompressd Python tooling has syntax errors"
+python3 "$ROOT/scripts/test-odin-memory-defaults.py" || fail "odin memory-default adapter regression failed"
+python3 -m py_compile "$ROOT/scripts/apply-kcompressd.py" "$ROOT/scripts/test-kcompressd-5.4.py" \
+  "$ROOT/scripts/apply-odin-memory-defaults.py" "$ROOT/scripts/test-odin-memory-defaults.py" || \
+  fail "kernel adapter Python tooling has syntax errors"
 [[ -s "$ROOT/port/kcompressd/mm/kcompressd.c" ]] || fail "missing Kcompressd worker source"
 
 # Refuse to follow a redirected output path or overwrite an unowned directory.
@@ -148,8 +151,12 @@ grep -Fqx $'\t/* odin-daily-power: preserve ramp-up delay; allow immediate ramp-
 grep -Fqx $'\ttunables->up_rate_limit_us = cpufreq_policy_transition_delay_us(policy);' "$SCHEDUTIL_SOURCE" || fail "original ramp-up initialization was not preserved"
 grep -Fqx $'\ttunables->down_rate_limit_us = 0;' "$SCHEDUTIL_SOURCE" || fail "down-rate default was not set to zero"
 SCHEDUTIL_DEFAULT_PATCH_SHA256="$(sha256sum "$ROOT/scripts/apply-odin-schedutil-default.py" | awk '{print $1}')"
-step "apply optional LZ4K zram compressor with 5.4 compatibility adapters"
+step "apply LZ4K zram compressor with 5.4 compatibility adapters"
 python3 "$ROOT/scripts/apply_lz4k_patch.py" "$KSRC" || fail "LZ4K source integration failed"
+step "set odin LZ4K compressor and conservative VM defaults"
+python3 "$ROOT/scripts/apply-odin-memory-defaults.py" "$KSRC" || fail "odin memory defaults integration failed"
+python3 "$ROOT/scripts/test-odin-memory-defaults.py" --source "$KSRC" || \
+  fail "odin memory defaults source regression failed"
 SOURCE_DATE_EPOCH="$(git -C "$KSRC" show -s --format=%ct HEAD)"
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || fail "could not derive SOURCE_DATE_EPOCH from the pinned kernel commit"
 export SOURCE_DATE_EPOCH
@@ -312,7 +319,7 @@ ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || tr
 # append its arguments rather than forcing a replacement kernel command line.
 "$KSRC/scripts/config" --file "$CFG" \
   --enable KSU --enable KPROBES --enable KALLSYMS_ALL \
-  --enable EXT4_FS --enable HEADERS_INSTALL \
+  --enable EXT4_FS --enable HEADERS_INSTALL --enable DEBUG_FS \
   --enable KSU_SUSFS --enable KSU_SUSFS_AVD \
   --enable KSU_SUSFS_PRIORITY_UID_FILTER \
   --enable CRYPTO_LZ4K \
@@ -322,11 +329,11 @@ ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || tr
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
   --enable CPU_FREQ_GOV_PERFORMANCE \
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
-  --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
+  --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all"
 make "${MAKE_ARGS[@]}" olddefconfig
 ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
 [[ "$ZRAM_KCONFIG_BEFORE" == "$ZRAM_KCONFIG_AFTER" ]] || \
-  fail "LZ4K integration changed existing zram configuration/default"
+  fail "LZ4K integration changed existing zram Kconfig"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" --config "$CFG" || \
   fail "MGLRU configuration or thermal protection regression failed"
 python3 "$ROOT/scripts/test-kcompressd-5.4.py" "$KSRC" || \
@@ -338,7 +345,7 @@ for config in \
   CONFIG_LZ4K_COMPRESS CONFIG_LZ4K_DECOMPRESS CONFIG_CPU_FREQ_GOV_SCHEDUTIL \
   CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL CONFIG_CPU_FREQ_GOV_PERFORMANCE \
   CONFIG_CPU_IDLE_GOV_MENU CONFIG_CPU_IDLE_GOV_TEO CONFIG_ARM_QCOM_LPM_CPUIDLE \
-  CONFIG_NO_HZ_IDLE CONFIG_RCU_FAST_NO_HZ CONFIG_RCU_NOCB_CPU \
+  CONFIG_NO_HZ_IDLE CONFIG_RCU_FAST_NO_HZ CONFIG_RCU_NOCB_CPU CONFIG_DEBUG_FS \
   CONFIG_SCHED_WALT CONFIG_UCLAMP_TASK CONFIG_UCLAMP_TASK_GROUP \
   CONFIG_THERMAL CONFIG_CPU_THERMAL CONFIG_THERMAL_GOV_STEP_WISE \
   CONFIG_QTI_THERMAL CONFIG_QTI_THERMAL_LIMITS_DCVS \
@@ -353,7 +360,7 @@ grep -q '^# CONFIG_CMDLINE_FORCE is not set$' "$CFG" || \
   fail "built-in command line would override bootloader arguments"
 grep -q '^# CONFIG_ARM_PSCI_CPUIDLE is not set$' "$CFG" || \
   fail "Qualcomm LPM cpuidle must remain the platform idle driver"
-grep -Fqx "CONFIG_CMDLINE=\"cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR\"" "$CFG" || \
+grep -Fqx "CONFIG_CMDLINE=\"cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all\"" "$CFG" || \
   fail "requested cpuidle governor was not preserved in the appended kernel command line"
 
 step "install UAPI headers for BakaSU preinit codegen"
@@ -373,7 +380,12 @@ Kernel commit: $KERNEL_REF
 LZ4K source: openEuler kernel PR #1277; original two-commit patch
 LZ4K upstream patch SHA-256: $LZ4K_PATCH_SHA256
 LZ4K Linux 5.4 adaptations: select CRYPTO_ACOMP2; zcomp backend inserted before NULL sentinel
-LZ4K build config: CONFIG_CRYPTO_LZ4K=y; runtime selectable, existing zram default and boot command line unchanged
+LZ4K build config: CONFIG_CRYPTO_LZ4K=y; zram compressor default=lz4k (runtime selectable before initialization)
+ZRAM capacity: not forced by the kernel package; 16 GiB requires matching ROM init/userspace setup before zram initialization
+VM defaults: vm.swappiness=60 (unchanged pinned baseline); vm.extra_free_kbytes=99083 KB; vm.watermark_scale_factor=100
+VM runtime ownership: Scene/Power HAL may write the same sysctls; no kernel polling or userspace policy service is installed
+Wakeup/suspend statistics: CONFIG_DEBUG_FS=y; /sys/kernel/debug/wakeup_sources and suspend_stats are available when debugfs is mounted
+RCU callback offload: CONFIG_RCU_NOCB_CPU=y with rcu_nocbs=all; rcu_nocb_poll is not enabled
 Kcompressd upstream reference: $KCOMPRESSD_RFC_URL (MediaTek RFC v1; odin Linux 5.4.302 page-based adaptation)
 Kcompressd adapter SHA-256: $KCOMPRESSD_ADAPTER_SHA256
 Kcompressd worker source SHA-256: $KCOMPRESSD_WORKER_SHA256
@@ -417,7 +429,7 @@ AnyKernel3 repository: $AK3_URL
 AnyKernel3 commit: $AK3_REF
 Default CPU frequency governor: schedutil (Android userspace may override at runtime)
 CPU idle governors: menu and TEO both built-in; requested default=$IDLE_GOVERNOR
-Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
+Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all
 Command-line mode: bootloader arguments appended; forced override disabled
 Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
 MGLRU: enabled by default at boot; runtime kill switch retained; no MIX 4 runtime validation yet
