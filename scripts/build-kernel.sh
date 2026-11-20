@@ -313,7 +313,9 @@ python3 "$ROOT/scripts/test-susfs-selinux-context-hash.py" "$KSRC" || \
 step "configure odin_defconfig"
 make "${MAKE_ARGS[@]}" odin_defconfig
 CFG="$KOUT/.config"
-ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
+# Kconfig treats an absent symbol and an explicit "not set" as the same value.
+# Compare only active ZRAM symbols so olddefconfig can emit disabled defaults.
+ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" | grep -vE '^# CONFIG_ZRAM[^ ]* is not set$' || true)"
 # Use scheduler-driven CPU frequency scaling and a testable TEO idle policy.
 # Keep performance/menu compiled, preserve Qualcomm LPM, and let the bootloader
 # append its arguments rather than forcing a replacement kernel command line.
@@ -331,7 +333,7 @@ ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || tr
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
   --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all"
 make "${MAKE_ARGS[@]}" olddefconfig
-ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
+ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" | grep -vE '^# CONFIG_ZRAM[^ ]* is not set$' || true)"
 [[ "$ZRAM_KCONFIG_BEFORE" == "$ZRAM_KCONFIG_AFTER" ]] || \
   fail "LZ4K integration changed existing zram Kconfig"
 python3 "$ROOT/scripts/test-odin-mglru.py" --target-commit "$KERNEL_REF" --source "$KSRC" --config "$CFG" || \
