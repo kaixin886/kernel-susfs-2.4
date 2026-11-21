@@ -31,15 +31,20 @@ CLANG_DIR="clang-r596125"
 CLANG_VERSION_EXPECT="clang version 22.0.2"
 AK3_URL="https://github.com/osm0sis/AnyKernel3.git"
 AK3_REF="41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1"
-ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-DefaultOn-Q32-MGLRU-EnabledDefault-UNTESTED.zip"
+ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-DefaultOn-Q32-MGLRU-EnabledDefault-RCU-NOCBS-ALL-DIAGNOSTIC-UNTESTED.zip"
+BASELINE_BUILD_COMMIT="dad714c595340ab4033a52a82bfd54b1d5ef8364"
+BASELINE_CONFIG="$ROOT/port/diagnostic/odin-2026-11-19-baseline.config"
+BASELINE_CONFIG_SHA256="85e9bc965e4303bb88ac3f393fd6b99d27114bea4596f6e58e5fc00dfa79d065"
+BASELINE_ZIP_NAME="Xiaomi-MIX4-odin-Los24-GApps-A17-k5.4.302-SUSFS2.4-BakaSU-sync-up-55f3dcb-SIDHashFix-DailyPower-LZ4K-Kcompressd-DefaultOn-Q32-MGLRU-EnabledDefault-UNTESTED.zip"
+BASELINE_ZIP_SHA256="40ae8ffd6664a695afd06b2d222b91d985426ce6d9ae3c1f36ae57471eea71ac"
 JOBS="${JOBS:-$(nproc)}"
 IDLE_GOVERNOR="${IDLE_GOVERNOR:-teo}"
 
 step() { printf '\n===== %s =====\n' "$*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 case "$IDLE_GOVERNOR" in
-  menu|teo) ;;
-  *) fail "IDLE_GOVERNOR must be either menu or teo" ;;
+  teo) ;;
+  *) fail "the RCU-only diagnostic must keep the Nov 19 TEO baseline (IDLE_GOVERNOR=teo)" ;;
 esac
 sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors"
 bash -n "$ROOT/scripts/test-odin-schedutil-fast-down.sh" || fail "runtime profile test has shell syntax errors"
@@ -322,7 +327,7 @@ ZRAM_KCONFIG_BEFORE="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || tr
   --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
   --enable CPU_FREQ_GOV_PERFORMANCE \
   --enable CPU_IDLE_GOV_MENU --enable CPU_IDLE_GOV_TEO \
-  --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR"
+  --set-str CMDLINE "cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all"
 make "${MAKE_ARGS[@]}" olddefconfig
 ZRAM_KCONFIG_AFTER="$(grep -E '^(CONFIG_ZRAM[^=]*=|# CONFIG_ZRAM)' "$CFG" || true)"
 [[ "$ZRAM_KCONFIG_BEFORE" == "$ZRAM_KCONFIG_AFTER" ]] || \
@@ -353,8 +358,39 @@ grep -q '^# CONFIG_CMDLINE_FORCE is not set$' "$CFG" || \
   fail "built-in command line would override bootloader arguments"
 grep -q '^# CONFIG_ARM_PSCI_CPUIDLE is not set$' "$CFG" || \
   fail "Qualcomm LPM cpuidle must remain the platform idle driver"
-grep -Fqx "CONFIG_CMDLINE=\"cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR\"" "$CFG" || \
-  fail "requested cpuidle governor was not preserved in the appended kernel command line"
+grep -Fqx "CONFIG_CMDLINE=\"cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all\"" "$CFG" || \
+  fail "requested TEO governor or RCU nocb diagnostic parameter is missing from the appended command line"
+python3 - "$BASELINE_CONFIG" "$CFG" "$BASELINE_CONFIG_SHA256" <<'PYEOF'
+from pathlib import Path
+import difflib
+import hashlib
+import sys
+
+baseline_path = Path(sys.argv[1])
+candidate_path = Path(sys.argv[2])
+expected_sha256 = sys.argv[3]
+actual_sha256 = hashlib.sha256(baseline_path.read_bytes()).hexdigest()
+if actual_sha256 != expected_sha256:
+    raise SystemExit(f"baseline config SHA-256 mismatch: {actual_sha256}")
+
+baseline = baseline_path.read_text().splitlines()
+candidate = candidate_path.read_text().splitlines()
+baseline_cmdline = [line for line in baseline if line.startswith("CONFIG_CMDLINE=")]
+candidate_cmdline = [line for line in candidate if line.startswith("CONFIG_CMDLINE=")]
+expected_baseline = 'CONFIG_CMDLINE="cgroup_disable=pressure cpuidle.governor=teo"'
+expected_candidate = 'CONFIG_CMDLINE="cgroup_disable=pressure cpuidle.governor=teo rcu_nocbs=all"'
+if baseline_cmdline != [expected_baseline] or candidate_cmdline != [expected_candidate]:
+    raise SystemExit(f"unexpected baseline/diagnostic command lines: {baseline_cmdline} -> {candidate_cmdline}")
+
+baseline_rest = [line for line in baseline if not line.startswith("CONFIG_CMDLINE=")]
+candidate_rest = [line for line in candidate if not line.startswith("CONFIG_CMDLINE=")]
+if baseline_rest != candidate_rest:
+    diff = "\n".join(difflib.unified_diff(
+        baseline_rest, candidate_rest, fromfile="Nov 19 baseline (without CMDLINE)",
+        tofile="diagnostic (without CMDLINE)", lineterm=""))
+    raise SystemExit("kernel config differs outside CONFIG_CMDLINE:\n" + diff)
+print("strict baseline Kconfig comparison: only CONFIG_CMDLINE adds rcu_nocbs=all: PASS")
+PYEOF
 
 step "install UAPI headers for BakaSU preinit codegen"
 make "${MAKE_ARGS[@]}" headers_install
@@ -366,10 +402,19 @@ make "${MAKE_ARGS[@]}" -j"$JOBS" Image
 step "collect kernel artifacts"
 cp "$KOUT/arch/arm64/boot/Image" "$OUT_STAGE/Image"
 cp "$CFG" "$OUT_STAGE/kernel.config"
+cp "$ROOT/scripts/ak3/DIAGNOSTIC-NOTES.md" "$OUT_STAGE/DIAGNOSTIC-NOTES.md"
 grep -o '"[^"]*"' "$KOUT/include/generated/utsrelease.h" | head -1 | tr -d '"' > "$OUT_STAGE/utsrelease.txt" || true
 cat > "$OUT_STAGE/source-pins.txt" <<EOF
 Kernel URL: $KERNEL_URL
 Kernel commit: $KERNEL_REF
+Diagnostic baseline build commit: $BASELINE_BUILD_COMMIT
+Diagnostic baseline package: $BASELINE_ZIP_NAME
+Diagnostic baseline package SHA-256: $BASELINE_ZIP_SHA256
+Diagnostic baseline config snapshot: port/diagnostic/odin-2026-11-19-baseline.config
+Diagnostic baseline config snapshot SHA-256: $BASELINE_CONFIG_SHA256
+Diagnostic scope: only CONFIG_CMDLINE appends rcu_nocbs=all; strict full-config comparison rejects every other Kconfig difference
+Diagnostic status: UNTESTED on device; successful CI/static checks do not establish boot or runtime behavior
+Rollback: flash the exact November 19 baseline AnyKernel3 package listed above from recovery/kernel flasher
 LZ4K source: openEuler kernel PR #1277; original two-commit patch
 LZ4K upstream patch SHA-256: $LZ4K_PATCH_SHA256
 LZ4K Linux 5.4 adaptations: select CRYPTO_ACOMP2; zcomp backend inserted before NULL sentinel
@@ -403,6 +448,7 @@ BakaSU #623 context_add_hash compatibility check: enabled by pinned kernel_compa
 SUSFS SELinux SID fix: susfs_security_context_to_sid_core delegates to 5.4 context_struct_to_sid() hash-aware helper
 SUSFS/BakaSU SELinux SID static regression test: scripts/test-susfs-selinux-context-hash.py passed before build
 Target ROM label: Inkypen LineageOS 24.0 GApps / Android 17 (user-reported; device runtime A/B pending)
+RCU callback offload diagnostic: CONFIG_RCU_NOCB_CPU=y was already enabled in the baseline; this package adds only rcu_nocbs=all; rcu_nocb_poll remains disabled
 BakaSU Manager #35262 WebView fix commit: $BAKASU_MANAGER_FIX_REF
 BakaSU Manager fix path: $BAKASU_MANAGER_FIX_PATH
 BakaSU Manager patch SHA-256: $BAKASU_MANAGER_PATCH_SHA256
@@ -417,7 +463,7 @@ AnyKernel3 repository: $AK3_URL
 AnyKernel3 commit: $AK3_REF
 Default CPU frequency governor: schedutil (Android userspace may override at runtime)
 CPU idle governors: menu and TEO both built-in; requested default=$IDLE_GOVERNOR
-Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR
+Built-in command line: cgroup_disable=pressure cpuidle.governor=$IDLE_GOVERNOR rcu_nocbs=all
 Command-line mode: bootloader arguments appended; forced override disabled
 Qualcomm LPM idle driver, WALT/uclamp, NO_HZ/RCU and QTI thermal protections: retained and config-asserted
 MGLRU: enabled by default at boot; runtime kill switch retained; no MIX 4 runtime validation yet
@@ -433,6 +479,7 @@ EOF
 
 step "package and verify pinned AnyKernel3 for odin / Horizon Kernel Flasher"
 sh -n "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "runtime profile has shell syntax errors before packaging"
+[[ -s "$ROOT/scripts/ak3/DIAGNOSTIC-NOTES.md" ]] || fail "missing RCU diagnostic and rollback notes"
 AK3_DIR="$WORK/ak3"
 mkdir -p "$AK3_DIR"
 git init -q "$AK3_DIR"
@@ -444,6 +491,7 @@ AK3_ACTUAL_REF="$(git -C "$AK3_DIR" rev-parse HEAD)"
 rm -rf -- "$AK3_DIR/.git" "$AK3_DIR/.github"
 cp "$ROOT/scripts/ak3/anykernel.sh" "$AK3_DIR/anykernel.sh"
 cp "$OUT_STAGE/Image" "$AK3_DIR/Image"
+cp "$OUT_STAGE/DIAGNOSTIC-NOTES.md" "$AK3_DIR/DIAGNOSTIC-NOTES.md"
 mkdir -p "$AK3_DIR/tools"
 cp "$ROOT/scripts/odin-schedutil-fast-down.sh" "$AK3_DIR/tools/odin-schedutil-fast-down.sh"
 chmod 0755 "$AK3_DIR/tools/odin-schedutil-fast-down.sh"
@@ -452,6 +500,7 @@ find "$AK3_DIR" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 unzip -t "$OUT_STAGE/$ZIP_NAME" >/dev/null || fail "AnyKernel3 ZIP integrity check failed"
 unzip -p "$OUT_STAGE/$ZIP_NAME" Image | cmp - "$OUT_STAGE/Image" || fail "AnyKernel3 ZIP Image differs from the built Image"
 unzip -p "$OUT_STAGE/$ZIP_NAME" anykernel.sh | cmp - "$ROOT/scripts/ak3/anykernel.sh" || fail "AnyKernel3 ZIP install script differs from the reviewed template"
+unzip -p "$OUT_STAGE/$ZIP_NAME" DIAGNOSTIC-NOTES.md | cmp - "$OUT_STAGE/DIAGNOSTIC-NOTES.md" || fail "AnyKernel3 ZIP diagnostic notes differ from the reviewed file"
 unzip -p "$OUT_STAGE/$ZIP_NAME" tools/odin-schedutil-fast-down.sh | cmp - "$ROOT/scripts/odin-schedutil-fast-down.sh" || fail "AnyKernel3 ZIP runtime profile differs from the reviewed script"
 python3 - "$AK3_DIR" "$OUT_STAGE/$ZIP_NAME" <<'PYEOF'
 from pathlib import Path
@@ -470,16 +519,16 @@ if actual != expected:
     raise SystemExit(f"AnyKernel3 ZIP file set mismatch: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
 print(f"AnyKernel3 ZIP file set matches pinned checkout/template: {len(actual)} entries")
 PYEOF
-(cd "$OUT_STAGE" && sha256sum Image kernel.config source-pins.txt "$ZIP_NAME" > SHA256SUMS && sha256sum -c SHA256SUMS)
+(cd "$OUT_STAGE" && sha256sum Image kernel.config source-pins.txt DIAGNOSTIC-NOTES.md "$ZIP_NAME" > SHA256SUMS && sha256sum -c SHA256SUMS)
 
 step "publish only named, verified artifacts to marker-owned out/"
-for file in Image kernel.config source-pins.txt SHA256SUMS utsrelease.txt "$ZIP_NAME"; do
+for file in Image kernel.config source-pins.txt DIAGNOSTIC-NOTES.md SHA256SUMS utsrelease.txt "$ZIP_NAME"; do
   [[ ! -L "$OUT/$file" ]] || fail "refusing to overwrite symlinked output artifact: $OUT/$file"
   if [[ -e "$OUT/$file" && ! -f "$OUT/$file" ]]; then
     fail "refusing to overwrite non-regular output artifact: $OUT/$file"
   fi
 done
-for file in Image kernel.config source-pins.txt SHA256SUMS utsrelease.txt "$ZIP_NAME"; do
+for file in Image kernel.config source-pins.txt DIAGNOSTIC-NOTES.md SHA256SUMS utsrelease.txt "$ZIP_NAME"; do
   tmp="$OUT/.$file.tmp.$$"
   cp -p "$OUT_STAGE/$file" "$tmp"
   mv -f -- "$tmp" "$OUT/$file"
